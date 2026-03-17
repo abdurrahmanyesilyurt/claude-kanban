@@ -48,6 +48,12 @@ function migrate(db: Database.Database) {
   if (!colNames.has("max_turns")) {
     db.exec("ALTER TABLE projects ADD COLUMN max_turns INTEGER NOT NULL DEFAULT 30");
   }
+  if (!colNames.has("extra_paths")) {
+    db.exec("ALTER TABLE projects ADD COLUMN extra_paths TEXT NOT NULL DEFAULT '[]'");
+  }
+  if (!colNames.has("urls")) {
+    db.exec("ALTER TABLE projects ADD COLUMN urls TEXT NOT NULL DEFAULT '[]'");
+  }
 
   // Agent runs table
   db.exec(`
@@ -98,6 +104,8 @@ export interface Project {
   color: string;
   allowed_tools: string;
   max_turns: number;
+  extra_paths: string; // JSON array of strings
+  urls: string; // JSON array of strings
   created_at: string;
 }
 
@@ -122,8 +130,8 @@ export function getAllProjects(): Project[] {
 export function createProject(project: Omit<Project, "created_at">): Project {
   const db = getDb();
   db.prepare(
-    "INSERT INTO projects (id, name, path, color, allowed_tools, max_turns) VALUES (?, ?, ?, ?, ?, ?)"
-  ).run(project.id, project.name, project.path, project.color, project.allowed_tools, project.max_turns);
+    "INSERT INTO projects (id, name, path, color, allowed_tools, max_turns, extra_paths, urls) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+  ).run(project.id, project.name, project.path, project.color, project.allowed_tools, project.max_turns, project.extra_paths ?? "[]", project.urls ?? "[]");
   return db.prepare("SELECT * FROM projects WHERE id = ?").get(project.id) as Project;
 }
 

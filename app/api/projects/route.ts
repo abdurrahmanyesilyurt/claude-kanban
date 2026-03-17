@@ -10,7 +10,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const { name, path, color, allowed_tools, max_turns } = body;
+  const { name, path, color, allowed_tools, max_turns, extra_paths, urls } = body;
 
   if (!name || !path) {
     return NextResponse.json({ error: "name and path are required" }, { status: 400 });
@@ -23,6 +23,8 @@ export async function POST(req: NextRequest) {
     color: color ?? "#6366f1",
     allowed_tools: allowed_tools ?? "Read,Glob,Grep,Edit,Write,Bash",
     max_turns: max_turns ?? 30,
+    extra_paths: JSON.stringify(extra_paths ?? []),
+    urls: JSON.stringify(urls ?? []),
   });
 
   return NextResponse.json(project, { status: 201 });
@@ -41,7 +43,7 @@ export async function PATCH(req: NextRequest) {
   const values: unknown[] = [];
 
   for (const [key, value] of Object.entries(fields)) {
-    if (value !== undefined && ["name", "path", "color", "allowed_tools", "max_turns"].includes(key)) {
+    if (value !== undefined && ["name", "path", "color", "allowed_tools", "max_turns", "extra_paths", "urls"].includes(key)) {
       sets.push(`${key} = ?`);
       values.push(value);
     }

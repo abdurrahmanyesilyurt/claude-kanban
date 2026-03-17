@@ -5,6 +5,8 @@ export interface Project {
   color: string;
   allowed_tools: string;
   max_turns: number;
+  extra_paths: string; // JSON array of extra directory paths
+  urls: string; // JSON array of reference URLs
   created_at: string;
 }
 

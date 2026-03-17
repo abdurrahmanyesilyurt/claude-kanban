@@ -18,6 +18,14 @@ export default function ProjectSettingsModal({
   const currentTools = new Set(project.allowed_tools?.split(",").filter(Boolean) ?? []);
   const [selectedTools, setSelectedTools] = useState<Set<string>>(currentTools);
   const [maxTurns, setMaxTurns] = useState(project.max_turns ?? 30);
+  const [extraPaths, setExtraPaths] = useState<string[]>(() => {
+    try { return JSON.parse(project.extra_paths || "[]"); } catch { return []; }
+  });
+  const [urls, setUrls] = useState<string[]>(() => {
+    try { return JSON.parse(project.urls || "[]"); } catch { return []; }
+  });
+  const [newPath, setNewPath] = useState("");
+  const [newUrl, setNewUrl] = useState("");
   const [loading, setLoading] = useState(false);
 
   const toggleTool = (toolId: string) => {
@@ -27,6 +35,28 @@ export default function ProjectSettingsModal({
       else next.add(toolId);
       return next;
     });
+  };
+
+  const addPath = () => {
+    if (newPath.trim()) {
+      setExtraPaths((prev) => [...prev, newPath.trim()]);
+      setNewPath("");
+    }
+  };
+
+  const removePath = (idx: number) => {
+    setExtraPaths((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const addUrl = () => {
+    if (newUrl.trim()) {
+      setUrls((prev) => [...prev, newUrl.trim()]);
+      setNewUrl("");
+    }
+  };
+
+  const removeUrl = (idx: number) => {
+    setUrls((prev) => prev.filter((_, i) => i !== idx));
   };
 
   const handleSave = async () => {
@@ -39,6 +69,8 @@ export default function ProjectSettingsModal({
           id: project.id,
           allowed_tools: Array.from(selectedTools).join(","),
           max_turns: maxTurns,
+          extra_paths: JSON.stringify(extraPaths),
+          urls: JSON.stringify(urls),
         }),
       });
       if (res.ok) {
@@ -53,10 +85,100 @@ export default function ProjectSettingsModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="w-full max-w-md bg-surface border border-border rounded-xl p-5 space-y-4">
+      <div className="w-full max-w-lg bg-surface border border-border rounded-xl p-5 space-y-4 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between">
           <h2 className="text-base font-semibold">Proje Ayarları</h2>
           <span className="text-xs text-muted">{project.name}</span>
+        </div>
+
+        {/* Primary Path (read-only display) */}
+        <div>
+          <label className="text-xs text-muted mb-1 block">Ana Dizin</label>
+          <div className="text-xs bg-background border border-border rounded-md px-2.5 py-1.5 text-muted font-mono">
+            {project.path}
+          </div>
+        </div>
+
+        {/* Extra Paths */}
+        <div>
+          <label className="text-xs text-muted mb-1.5 block">
+            Ek Dizinler
+          </label>
+          <p className="text-[10px] text-muted mb-2">
+            Agent&apos;ın erişebileceği ek proje klasörleri (ör. frontend, backend ayrı dizinlerde ise)
+          </p>
+          {extraPaths.map((p, i) => (
+            <div key={i} className="flex items-center gap-1.5 mb-1">
+              <div className="flex-1 text-xs bg-background border border-border rounded-md px-2.5 py-1.5 font-mono truncate">
+                {p}
+              </div>
+              <button
+                type="button"
+                onClick={() => removePath(i)}
+                className="text-red-400 hover:text-red-300 text-xs px-1.5 shrink-0"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+          <div className="flex gap-1.5">
+            <input
+              placeholder="C:/projects/frontend"
+              value={newPath}
+              onChange={(e) => setNewPath(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addPath())}
+              className="flex-1 bg-background border border-border rounded-md px-2.5 py-1.5 text-xs outline-none focus:border-border-hover font-mono"
+            />
+            <button
+              type="button"
+              onClick={addPath}
+              disabled={!newPath.trim()}
+              className="px-3 py-1.5 text-xs bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 rounded-md transition-colors disabled:opacity-30"
+            >
+              Ekle
+            </button>
+          </div>
+        </div>
+
+        {/* URLs */}
+        <div>
+          <label className="text-xs text-muted mb-1.5 block">
+            Referans URL&apos;ler
+          </label>
+          <p className="text-[10px] text-muted mb-2">
+            Agent&apos;ın WebFetch ile inceleyebileceği web sayfaları (ör. canlı uygulama, API docs)
+          </p>
+          {urls.map((u, i) => (
+            <div key={i} className="flex items-center gap-1.5 mb-1">
+              <div className="flex-1 text-xs bg-background border border-border rounded-md px-2.5 py-1.5 font-mono truncate text-indigo-300">
+                {u}
+              </div>
+              <button
+                type="button"
+                onClick={() => removeUrl(i)}
+                className="text-red-400 hover:text-red-300 text-xs px-1.5 shrink-0"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+          <div className="flex gap-1.5">
+            <input
+              placeholder="https://example.com/dashboard"
+              value={newUrl}
+              onChange={(e) => setNewUrl(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addUrl())}
+              className="flex-1 bg-background border border-border rounded-md px-2.5 py-1.5 text-xs outline-none focus:border-border-hover font-mono"
+            />
+            <button
+              type="button"
+              onClick={addUrl}
+              disabled={!newUrl.trim()}
+              className="px-3 py-1.5 text-xs bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 rounded-md transition-colors disabled:opacity-30"
+            >
+              Ekle
+            </button>
+          </div>
         </div>
 
         {/* Allowed Tools */}
