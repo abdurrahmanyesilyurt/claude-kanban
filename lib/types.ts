@@ -7,6 +7,11 @@ export interface Project {
   max_turns: number;
   extra_paths: string; // JSON array of extra directory paths
   urls: string; // JSON array of reference URLs
+  doc_template: string; // Document format template for agent output
+  build_command: string; // Build/verify command to run after task completion (e.g. "dotnet build", "npm run build")
+  custom_instructions: string; // Project-specific agent instructions (coding style, conventions, etc.)
+  test_command: string; // Test command to run after build (e.g. "dotnet test", "npm test")
+  pre_task_command: string; // Command to run before task starts (e.g. "git pull", "npm install")
   created_at: string;
 }
 

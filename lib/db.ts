@@ -54,6 +54,21 @@ function migrate(db: Database.Database) {
   if (!colNames.has("urls")) {
     db.exec("ALTER TABLE projects ADD COLUMN urls TEXT NOT NULL DEFAULT '[]'");
   }
+  if (!colNames.has("doc_template")) {
+    db.exec("ALTER TABLE projects ADD COLUMN doc_template TEXT NOT NULL DEFAULT ''");
+  }
+  if (!colNames.has("build_command")) {
+    db.exec("ALTER TABLE projects ADD COLUMN build_command TEXT NOT NULL DEFAULT ''");
+  }
+  if (!colNames.has("custom_instructions")) {
+    db.exec("ALTER TABLE projects ADD COLUMN custom_instructions TEXT NOT NULL DEFAULT ''");
+  }
+  if (!colNames.has("test_command")) {
+    db.exec("ALTER TABLE projects ADD COLUMN test_command TEXT NOT NULL DEFAULT ''");
+  }
+  if (!colNames.has("pre_task_command")) {
+    db.exec("ALTER TABLE projects ADD COLUMN pre_task_command TEXT NOT NULL DEFAULT ''");
+  }
 
   // Agent runs table
   db.exec(`
@@ -135,6 +150,11 @@ export interface Project {
   max_turns: number;
   extra_paths: string; // JSON array of strings
   urls: string; // JSON array of strings
+  doc_template: string; // Document format template
+  build_command: string; // Build/verify command
+  custom_instructions: string; // Project-specific agent instructions
+  test_command: string; // Test command to run after build
+  pre_task_command: string; // Command to run before task starts
   created_at: string;
 }
 
@@ -159,8 +179,8 @@ export function getAllProjects(): Project[] {
 export function createProject(project: Omit<Project, "created_at">): Project {
   const db = getDb();
   db.prepare(
-    "INSERT INTO projects (id, name, path, color, allowed_tools, max_turns, extra_paths, urls) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-  ).run(project.id, project.name, project.path, project.color, project.allowed_tools, project.max_turns, project.extra_paths ?? "[]", project.urls ?? "[]");
+    "INSERT INTO projects (id, name, path, color, allowed_tools, max_turns, extra_paths, urls, doc_template, build_command, custom_instructions, test_command, pre_task_command) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  ).run(project.id, project.name, project.path, project.color, project.allowed_tools, project.max_turns, project.extra_paths ?? "[]", project.urls ?? "[]", project.doc_template ?? "", project.build_command ?? "", project.custom_instructions ?? "", project.test_command ?? "", project.pre_task_command ?? "");
   return db.prepare("SELECT * FROM projects WHERE id = ?").get(project.id) as Project;
 }
 

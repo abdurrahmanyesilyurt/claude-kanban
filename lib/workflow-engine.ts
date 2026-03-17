@@ -10,6 +10,20 @@ import {
 } from "./db";
 import type { Project, WorkflowStepRow } from "./db";
 
+const BROWSER_INSTRUCTIONS_WORKFLOW = `
+
+--- Tarayıcı Aracı ---
+Web sayfalarını kontrol etmek için Bash ile browser-cli kullanabilirsin:
+  node scripts/browser-cli.mjs open <url>         — Sayfa aç
+  node scripts/browser-cli.mjs get-elements        — İnteraktif elementleri listele
+  node scripts/browser-cli.mjs click "<selector>"  — Tıkla
+  node scripts/browser-cli.mjs fill "<selector>" <değer> — Form doldur
+  node scripts/browser-cli.mjs get-text            — Sayfa metnini al
+  node scripts/browser-cli.mjs navigate <url>      — Başka sayfaya git
+  node scripts/browser-cli.mjs screenshot          — Screenshot al
+  node scripts/browser-cli.mjs close               — Tarayıcıyı kapat
+`;
+
 // --- In-memory log pub/sub (same pattern as claude-agent.ts) ---
 const workflowLogs = new Map<string, string[]>();
 const workflowListeners = new Map<string, Set<(line: string) => void>>();
@@ -209,7 +223,11 @@ async function executeWorkflowSteps(
   projectPath: string,
   allowedTools: string[],
   maxTurns: number,
-  abortController: AbortController
+  abortController: AbortController,
+  buildCommand?: string,
+  testCommand?: string,
+  customInstructions?: string,
+  preTaskCommand?: string
 ): Promise<boolean> {
   const MAX_CONCURRENT = 3;
 
@@ -226,10 +244,38 @@ async function executeWorkflowSteps(
     const hasMemory = Object.keys(memoryObj).length > 0;
 
     let fullPrompt = "";
+
+    // Custom instructions
+    if (customInstructions?.trim()) {
+      fullPrompt += `--- Proje Talimatları ---\n${customInstructions}\n\n`;
+    }
+
+    // Pre-task command
+    if (preTaskCommand?.trim()) {
+      fullPrompt += `--- Ön Komut ---\nGöreve başlamadan ÖNCE çalıştır: ${preTaskCommand}\n\n`;
+    }
+
     if (hasMemory) {
       fullPrompt += `--- Paylaşılan Hafıza (diğer adımların sonuçları) ---\n${JSON.stringify(memoryObj, null, 2)}\n\n`;
     }
     fullPrompt += `--- Görev ---\n${step.prompt}`;
+
+    // Build/verify + test commands
+    const verifyCommands: string[] = [];
+    if (buildCommand?.trim()) verifyCommands.push(buildCommand);
+    if (testCommand?.trim()) verifyCommands.push(testCommand);
+
+    if (verifyCommands.length > 0) {
+      fullPrompt += `\n\n--- Doğrulama Komutları (ZORUNLU) ---
+İşini bitirdikten sonra sırasıyla çalıştır:
+
+${verifyCommands.map((cmd, i) => `${i + 1}. ${cmd}`).join("\n")}
+
+Herhangi biri başarısız olursa hataları düzelt ve tekrar çalıştır.
+TÜM komutlar başarılı olana kadar görevi TAMAMLANMIŞ sayma.`;
+    }
+
+    fullPrompt += BROWSER_INSTRUCTIONS_WORKFLOW;
 
     try {
       const result = await runQueryAgent(
@@ -400,7 +446,7 @@ export async function startWorkflow(workflowId: string) {
 
     // Phase 2: Execute steps
     pushLog(workflowId, `[sistem] Adımlar yürütülüyor...`);
-    const stepsOk = await executeWorkflowSteps(workflowId, project.path, allowedTools, maxTurns, abortController);
+    const stepsOk = await executeWorkflowSteps(workflowId, project.path, allowedTools, maxTurns, abortController, project.build_command, project.test_command, project.custom_instructions, project.pre_task_command);
     if (abortController.signal.aborted) {
       runningWorkflows.delete(workflowId);
       return;

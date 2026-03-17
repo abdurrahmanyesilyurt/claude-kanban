@@ -47,3 +47,6 @@ kanban.db-shm
 
 # browser screenshots
 /public/screenshots
+
+# browser session state
+.browser-session

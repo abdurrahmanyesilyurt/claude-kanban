@@ -26,6 +26,11 @@ export default function ProjectSettingsModal({
   });
   const [newPath, setNewPath] = useState("");
   const [newUrl, setNewUrl] = useState("");
+  const [docTemplate, setDocTemplate] = useState(project.doc_template || "");
+  const [buildCommand, setBuildCommand] = useState(project.build_command || "");
+  const [customInstructions, setCustomInstructions] = useState(project.custom_instructions || "");
+  const [testCommand, setTestCommand] = useState(project.test_command || "");
+  const [preTaskCommand, setPreTaskCommand] = useState(project.pre_task_command || "");
   const [loading, setLoading] = useState(false);
 
   const toggleTool = (toolId: string) => {
@@ -71,6 +76,11 @@ export default function ProjectSettingsModal({
           max_turns: maxTurns,
           extra_paths: JSON.stringify(extraPaths),
           urls: JSON.stringify(urls),
+          doc_template: docTemplate,
+          build_command: buildCommand,
+          custom_instructions: customInstructions,
+          test_command: testCommand,
+          pre_task_command: preTaskCommand,
         }),
       });
       if (res.ok) {
@@ -97,6 +107,35 @@ export default function ProjectSettingsModal({
           <div className="text-xs bg-background border border-border rounded-md px-2.5 py-1.5 text-muted font-mono">
             {project.path}
           </div>
+        </div>
+
+        {/* Custom Instructions */}
+        <div>
+          <label className="text-xs text-muted mb-1.5 block">
+            Proje Talimatları
+          </label>
+          <p className="text-[10px] text-muted mb-2">
+            Agent&apos;a projeye özel kurallar ve yönergeler. Her görevde otomatik uygulanır.
+          </p>
+          <textarea
+            value={customInstructions}
+            onChange={(e) => setCustomInstructions(e.target.value)}
+            placeholder={`Örnek:\n- Türkçe yorum yaz\n- Repository pattern kullan\n- Her servis IService interface'i implemente etsin\n- Hata mesajlarını Türkçe yaz\n- async/await kullan, callback kullanma`}
+            rows={5}
+            className="w-full bg-background border border-border rounded-md px-2.5 py-2 text-xs outline-none focus:border-border-hover font-mono resize-y min-h-[80px]"
+          />
+          {customInstructions.trim() && (
+            <div className="flex items-center gap-1.5 mt-1.5">
+              <span className="text-[10px] text-emerald-400">Aktif</span>
+              <button
+                type="button"
+                onClick={() => setCustomInstructions("")}
+                className="text-[10px] text-muted hover:text-red-400 transition-colors"
+              >
+                Temizle
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Extra Paths */}
@@ -179,6 +218,109 @@ export default function ProjectSettingsModal({
               Ekle
             </button>
           </div>
+        </div>
+
+        {/* Commands Section */}
+        <div className="border-t border-border pt-4">
+          <h3 className="text-xs font-semibold text-muted mb-3">Komutlar</h3>
+
+          {/* Pre-task Command */}
+          <div className="mb-3">
+            <label className="text-xs text-muted mb-1 block">
+              Ön Komut (Görev Öncesi)
+            </label>
+            <p className="text-[10px] text-muted mb-1.5">
+              Görev başlamadan önce çalışır: bağımlılık yükleme, güncel kodu çekme vb.
+            </p>
+            <input
+              value={preTaskCommand}
+              onChange={(e) => setPreTaskCommand(e.target.value)}
+              placeholder="Örn: git pull && dotnet restore"
+              className="w-full bg-background border border-border rounded-md px-2.5 py-1.5 text-xs outline-none focus:border-border-hover font-mono"
+            />
+          </div>
+
+          {/* Build Command */}
+          <div className="mb-3">
+            <label className="text-xs text-muted mb-1 block">
+              Build Komutu
+            </label>
+            <p className="text-[10px] text-muted mb-1.5">
+              Görev bittikten sonra çalışır. Hata alırsa agent düzeltip tekrar dener.
+            </p>
+            <input
+              value={buildCommand}
+              onChange={(e) => setBuildCommand(e.target.value)}
+              placeholder="Örn: dotnet build, npm run build, tsc --noEmit"
+              className="w-full bg-background border border-border rounded-md px-2.5 py-1.5 text-xs outline-none focus:border-border-hover font-mono"
+            />
+          </div>
+
+          {/* Test Command */}
+          <div>
+            <label className="text-xs text-muted mb-1 block">
+              Test Komutu
+            </label>
+            <p className="text-[10px] text-muted mb-1.5">
+              Build başarılı olduktan sonra çalışır. Test geçmeden görev tamamlanmaz.
+            </p>
+            <input
+              value={testCommand}
+              onChange={(e) => setTestCommand(e.target.value)}
+              placeholder="Örn: dotnet test, npm test, pytest"
+              className="w-full bg-background border border-border rounded-md px-2.5 py-1.5 text-xs outline-none focus:border-border-hover font-mono"
+            />
+          </div>
+
+          {/* Active commands indicator */}
+          {(preTaskCommand.trim() || buildCommand.trim() || testCommand.trim()) && (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {preTaskCommand.trim() && (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                  Ön Komut
+                </span>
+              )}
+              {buildCommand.trim() && (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                  Build
+                </span>
+              )}
+              {testCommand.trim() && (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                  Test
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Document Template */}
+        <div>
+          <label className="text-xs text-muted mb-1.5 block">
+            Döküman Şablonu
+          </label>
+          <p className="text-[10px] text-muted mb-2">
+            Agent döküman üretirken bu formata uyar. Boş bırakılırsa agent kendi formatını kullanır.
+          </p>
+          <textarea
+            value={docTemplate}
+            onChange={(e) => setDocTemplate(e.target.value)}
+            placeholder={`Örnek:\n# [Başlık]\n\n## Özet\nKısa açıklama...\n\n## API Değişiklikleri\n### Endpoint\n- Method: POST/GET/...\n- URL: /api/...\n- Request Body: ...\n- Response: ...\n\n## Frontend Senaryoları\n1. ...\n2. ...\n\n## Kullanım Notları\n...`}
+            rows={8}
+            className="w-full bg-background border border-border rounded-md px-2.5 py-2 text-xs outline-none focus:border-border-hover font-mono resize-y min-h-[100px]"
+          />
+          {docTemplate.trim() && (
+            <div className="flex items-center gap-1.5 mt-1.5">
+              <span className="text-[10px] text-emerald-400">Aktif</span>
+              <button
+                type="button"
+                onClick={() => setDocTemplate("")}
+                className="text-[10px] text-muted hover:text-red-400 transition-colors"
+              >
+                Temizle
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Allowed Tools */}
