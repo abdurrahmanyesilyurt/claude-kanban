@@ -44,3 +44,6 @@ next-env.d.ts
 kanban.db
 kanban.db-wal
 kanban.db-shm
+
+# browser screenshots
+/public/screenshots

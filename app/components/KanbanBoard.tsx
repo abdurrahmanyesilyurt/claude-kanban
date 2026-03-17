@@ -12,6 +12,7 @@ import ProjectSettingsModal from "./ProjectSettingsModal";
 import EditTaskModal from "./EditTaskModal";
 import StatsBar from "./StatsBar";
 import WorkflowBoard from "./WorkflowBoard";
+import BrowserPanel from "./BrowserPanel";
 
 const COLUMNS: Task["status"][] = ["todo", "in_progress", "done", "error"];
 
@@ -37,6 +38,7 @@ function KanbanBoardInner() {
   const [sortBy, setSortBy] = useState<"date" | "priority">("date");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [viewMode, setViewMode] = useState<"kanban" | "workflows">("kanban");
+  const [showBrowser, setShowBrowser] = useState(false);
 
   const fetchData = useCallback(async () => {
     const [projRes, taskRes] = await Promise.all([
@@ -297,6 +299,12 @@ function KanbanBoardInner() {
               </button>
             )}
             <button
+              onClick={() => setShowBrowser(true)}
+              className="px-3 py-1.5 text-sm border border-border hover:border-border-hover rounded-md transition-colors text-muted hover:text-foreground"
+            >
+              🌐 Browser
+            </button>
+            <button
               onClick={() => setShowNewTask(true)}
               disabled={projects.length === 0}
               className="px-3 py-1.5 text-sm bg-indigo-600 hover:bg-indigo-500 rounded-md transition-colors disabled:opacity-50"
@@ -395,6 +403,9 @@ function KanbanBoardInner() {
         )}
       </main>
       )}
+
+      {/* Browser */}
+      {showBrowser && <BrowserPanel onClose={() => setShowBrowser(false)} />}
 
       {/* Modals (always rendered regardless of view) */}
       {showNewTask && (
