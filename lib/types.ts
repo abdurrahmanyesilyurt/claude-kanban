@@ -63,3 +63,60 @@ export const STATUS_COLORS: Record<Task["status"], string> = {
   done: "#10b981",
   error: "#ef4444",
 };
+
+// --- Workflow Types ---
+
+export type WorkflowStatus = "draft" | "planning" | "running" | "reviewing" | "done" | "error" | "cancelled";
+export type WorkflowStepStatus = "pending" | "running" | "done" | "error" | "skipped";
+
+export interface Workflow {
+  id: string;
+  project_id: string;
+  title: string;
+  description: string;
+  status: WorkflowStatus;
+  shared_memory: string;
+  plan: string;
+  created_at: string;
+}
+
+export interface WorkflowStep {
+  id: string;
+  workflow_id: string;
+  role: string;
+  title: string;
+  prompt: string;
+  status: WorkflowStepStatus;
+  depends_on: string;
+  agent_summary: string;
+  order_index: number;
+  created_at: string;
+}
+
+export const WORKFLOW_STATUS_LABELS: Record<WorkflowStatus, string> = {
+  draft: "Taslak",
+  planning: "Planlama",
+  running: "Yürütülüyor",
+  reviewing: "İnceleniyor",
+  done: "Tamamlandı",
+  error: "Hata",
+  cancelled: "İptal Edildi",
+};
+
+export const WORKFLOW_STATUS_COLORS: Record<WorkflowStatus, string> = {
+  draft: "#6b7280",
+  planning: "#8b5cf6",
+  running: "#f59e0b",
+  reviewing: "#3b82f6",
+  done: "#10b981",
+  error: "#ef4444",
+  cancelled: "#9ca3af",
+};
+
+export const STEP_STATUS_LABELS: Record<WorkflowStepStatus, string> = {
+  pending: "Bekliyor",
+  running: "Çalışıyor",
+  done: "Tamamlandı",
+  error: "Hata",
+  skipped: "Atlandı",
+};

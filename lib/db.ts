@@ -78,6 +78,35 @@ function migrate(db: Database.Database) {
     db.exec("ALTER TABLE agent_runs ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0");
   }
 
+  // Workflow tables
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS workflows (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'draft',
+      shared_memory TEXT NOT NULL DEFAULT '{}',
+      plan TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS workflow_steps (
+      id TEXT PRIMARY KEY,
+      workflow_id TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT '',
+      title TEXT NOT NULL,
+      prompt TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending',
+      depends_on TEXT NOT NULL DEFAULT '[]',
+      agent_summary TEXT NOT NULL DEFAULT '',
+      order_index INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE
+    );
+  `);
+
   // Task migrations
   const taskCols = db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[];
   const taskColNames = new Set(taskCols.map((c) => c.name));
@@ -229,6 +258,99 @@ export function getAgentRuns(taskId: string): AgentRun[] {
   return getDb()
     .prepare("SELECT * FROM agent_runs WHERE task_id = ? ORDER BY started_at DESC")
     .all(taskId) as AgentRun[];
+}
+
+// --- Workflow helpers ---
+
+export interface WorkflowRow {
+  id: string;
+  project_id: string;
+  title: string;
+  description: string;
+  status: string;
+  shared_memory: string;
+  plan: string;
+  created_at: string;
+}
+
+export interface WorkflowStepRow {
+  id: string;
+  workflow_id: string;
+  role: string;
+  title: string;
+  prompt: string;
+  status: string;
+  depends_on: string;
+  agent_summary: string;
+  order_index: number;
+  created_at: string;
+}
+
+export function createWorkflow(wf: Pick<WorkflowRow, "id" | "project_id" | "title" | "description">): WorkflowRow {
+  const db = getDb();
+  db.prepare("INSERT INTO workflows (id, project_id, title, description) VALUES (?, ?, ?, ?)").run(wf.id, wf.project_id, wf.title, wf.description);
+  return db.prepare("SELECT * FROM workflows WHERE id = ?").get(wf.id) as WorkflowRow;
+}
+
+export function getWorkflowsByProject(projectId?: string): WorkflowRow[] {
+  const db = getDb();
+  if (projectId) {
+    return db.prepare("SELECT * FROM workflows WHERE project_id = ? ORDER BY created_at DESC").all(projectId) as WorkflowRow[];
+  }
+  return db.prepare("SELECT * FROM workflows ORDER BY created_at DESC").all() as WorkflowRow[];
+}
+
+export function getWorkflow(id: string): WorkflowRow | undefined {
+  return getDb().prepare("SELECT * FROM workflows WHERE id = ?").get(id) as WorkflowRow | undefined;
+}
+
+export function updateWorkflow(id: string, fields: Partial<Omit<WorkflowRow, "id" | "created_at">>): WorkflowRow | null {
+  const db = getDb();
+  const sets: string[] = [];
+  const values: unknown[] = [];
+  for (const [key, value] of Object.entries(fields)) {
+    if (value !== undefined) {
+      sets.push(`${key} = ?`);
+      values.push(value);
+    }
+  }
+  if (sets.length === 0) return db.prepare("SELECT * FROM workflows WHERE id = ?").get(id) as WorkflowRow | null;
+  values.push(id);
+  db.prepare(`UPDATE workflows SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+  return db.prepare("SELECT * FROM workflows WHERE id = ?").get(id) as WorkflowRow | null;
+}
+
+export function deleteWorkflow(id: string): boolean {
+  const db = getDb();
+  db.prepare("DELETE FROM workflow_steps WHERE workflow_id = ?").run(id);
+  const r = db.prepare("DELETE FROM workflows WHERE id = ?").run(id);
+  return r.changes > 0;
+}
+
+export function createWorkflowStep(step: Pick<WorkflowStepRow, "id" | "workflow_id" | "role" | "title" | "prompt" | "depends_on" | "order_index">): WorkflowStepRow {
+  const db = getDb();
+  db.prepare("INSERT INTO workflow_steps (id, workflow_id, role, title, prompt, depends_on, order_index) VALUES (?, ?, ?, ?, ?, ?, ?)").run(step.id, step.workflow_id, step.role, step.title, step.prompt, step.depends_on, step.order_index);
+  return db.prepare("SELECT * FROM workflow_steps WHERE id = ?").get(step.id) as WorkflowStepRow;
+}
+
+export function getWorkflowSteps(workflowId: string): WorkflowStepRow[] {
+  return getDb().prepare("SELECT * FROM workflow_steps WHERE workflow_id = ? ORDER BY order_index ASC").all(workflowId) as WorkflowStepRow[];
+}
+
+export function updateWorkflowStep(id: string, fields: Partial<Omit<WorkflowStepRow, "id" | "workflow_id" | "created_at">>): WorkflowStepRow | null {
+  const db = getDb();
+  const sets: string[] = [];
+  const values: unknown[] = [];
+  for (const [key, value] of Object.entries(fields)) {
+    if (value !== undefined) {
+      sets.push(`${key} = ?`);
+      values.push(value);
+    }
+  }
+  if (sets.length === 0) return db.prepare("SELECT * FROM workflow_steps WHERE id = ?").get(id) as WorkflowStepRow | null;
+  values.push(id);
+  db.prepare(`UPDATE workflow_steps SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+  return db.prepare("SELECT * FROM workflow_steps WHERE id = ?").get(id) as WorkflowStepRow | null;
 }
 
 export function updateTask(id: string, fields: Partial<Pick<Task, "status" | "progress" | "title" | "description" | "priority" | "next_task_id" | "max_retries" | "retry_count">>): Task | null {

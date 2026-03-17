@@ -173,32 +173,64 @@ export async function runAgent(
     });
 
     for await (const message of session) {
-      if (message.type === "assistant") {
-        const content = message.message?.content;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const msg = message as any;
+
+      if (msg.type === "assistant") {
+        const content = msg.message?.content ?? msg.content;
         if (Array.isArray(content)) {
           for (const block of content) {
-            if (block.type === "text") {
+            if (block.type === "text" && block.text) {
               pushLog(taskId, `[assistant] ${block.text}`);
             } else if (block.type === "tool_use") {
               pushLog(
                 taskId,
                 `[tool] ${block.name}: ${JSON.stringify(block.input).slice(0, 200)}`
               );
+            } else if (block.type === "tool_result") {
+              const text = typeof block.content === "string"
+                ? block.content
+                : Array.isArray(block.content)
+                  ? block.content.map((c: any) => c.text || "").join("")
+                  : "";
+              if (text) {
+                pushLog(taskId, `[tool_result] ${text.slice(0, 300)}`);
+              }
             }
           }
         }
-        lastProgress = Math.min(90, lastProgress + 10);
+        lastProgress = Math.min(90, lastProgress + 5);
         updateTask(taskId, { progress: lastProgress });
-      } else if (message.type === "result") {
-        totalCost = message.total_cost_usd ?? 0;
-        totalDuration = message.duration_ms ?? 0;
+      } else if (msg.type === "user") {
+        // Tool results come back as user messages
+        const content = msg.message?.content ?? msg.content;
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block.type === "tool_result") {
+              const text = typeof block.content === "string"
+                ? block.content.slice(0, 300)
+                : Array.isArray(block.content)
+                  ? block.content.map((c: any) => c.text || "").join("").slice(0, 300)
+                  : "";
+              if (text) {
+                pushLog(taskId, `[tool_result] ${text}`);
+              }
+            }
+          }
+        }
+      } else if (msg.type === "result") {
+        totalCost = msg.total_cost_usd ?? 0;
+        totalDuration = msg.duration_ms ?? 0;
         pushLog(
           taskId,
-          `[result] Maliyet: $${totalCost.toFixed(4)}, Süre: ${totalDuration}ms, Turns: ${message.num_turns ?? "?"}`
+          `[result] Maliyet: $${totalCost.toFixed(4)}, Süre: ${totalDuration}ms, Turns: ${msg.num_turns ?? "?"}`
         );
-        if ("result" in message && message.result) {
-          pushLog(taskId, `[result] ${message.result}`);
+        if (msg.result) {
+          pushLog(taskId, `[result] ${msg.result}`);
         }
+      } else {
+        // Log any unknown message types for debugging
+        pushLog(taskId, `[${msg.type || "unknown"}] ${JSON.stringify(msg).slice(0, 300)}`);
       }
     }
 

@@ -11,6 +11,7 @@ import AgentLogPanel from "./AgentLogPanel";
 import ProjectSettingsModal from "./ProjectSettingsModal";
 import EditTaskModal from "./EditTaskModal";
 import StatsBar from "./StatsBar";
+import WorkflowBoard from "./WorkflowBoard";
 
 const COLUMNS: Task["status"][] = ["todo", "in_progress", "done", "error"];
 
@@ -35,6 +36,7 @@ function KanbanBoardInner() {
   const [dragOverColumn, setDragOverColumn] = useState<Task["status"] | null>(null);
   const [sortBy, setSortBy] = useState<"date" | "priority">("date");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<"kanban" | "workflows">("kanban");
 
   const fetchData = useCallback(async () => {
     const [projRes, taskRes] = await Promise.all([
@@ -185,18 +187,48 @@ function KanbanBoardInner() {
       )}
 
       <div className={`${sidebarOpen ? "translate-x-0" : "-translate-x-full"} md:translate-x-0 fixed md:relative z-50 md:z-auto transition-transform duration-200`}>
-        <Sidebar
-          projects={projects}
-          activeProjectId={activeProjectId}
-          onSelectProject={(id) => {
-            setActiveProjectId(id);
-            setSidebarOpen(false);
-          }}
-          onProjectCreated={(p) => setProjects((prev) => [p, ...prev])}
-          onDeleteProject={handleDeleteProject}
-        />
+        <div className="flex flex-col h-screen">
+          <Sidebar
+            projects={projects}
+            activeProjectId={activeProjectId}
+            onSelectProject={(id) => {
+              setActiveProjectId(id);
+              setSidebarOpen(false);
+            }}
+            onProjectCreated={(p) => setProjects((prev) => [p, ...prev])}
+            onDeleteProject={handleDeleteProject}
+          />
+          {/* View toggle at bottom of sidebar area - overlaid */}
+        </div>
       </div>
 
+      {viewMode === "workflows" ? (
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {/* Workflow toolbar with view toggle */}
+          <div className="flex items-center gap-2 px-4 py-2 border-b border-border">
+            <button
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+              className="md:hidden text-muted hover:text-foreground text-lg"
+            >
+              &#9776;
+            </button>
+            <div className="flex rounded-md border border-border overflow-hidden">
+              <button
+                onClick={() => setViewMode("kanban")}
+                className="px-3 py-1 text-xs text-muted hover:text-foreground transition-colors"
+              >
+                Kanban
+              </button>
+              <button
+                className="px-3 py-1 text-xs bg-indigo-600/20 text-indigo-300 border-l border-border"
+              >
+                İş Akışları
+              </button>
+            </div>
+          </div>
+          <WorkflowBoard projects={projects} activeProjectId={activeProjectId} />
+        </div>
+      ) : (
       <main className="flex-1 flex flex-col overflow-hidden">
         {/* Toolbar */}
         <div className="flex items-center justify-between px-4 md:px-6 py-3 border-b border-border gap-2">
@@ -207,6 +239,19 @@ function KanbanBoardInner() {
             >
               &#9776;
             </button>
+            <div className="flex rounded-md border border-border overflow-hidden mr-2">
+              <button
+                className="px-3 py-1 text-xs bg-indigo-600/20 text-indigo-300 border-r border-border"
+              >
+                Kanban
+              </button>
+              <button
+                onClick={() => setViewMode("workflows")}
+                className="px-3 py-1 text-xs text-muted hover:text-foreground transition-colors"
+              >
+                İş Akışları
+              </button>
+            </div>
             <h2 className="text-sm font-medium text-muted">
             {activeProjectId
               ? projectMap.get(activeProjectId)?.name ?? "Proje"
@@ -349,8 +394,9 @@ function KanbanBoardInner() {
         </div>
         )}
       </main>
+      )}
 
-      {/* Modals */}
+      {/* Modals (always rendered regardless of view) */}
       {showNewTask && (
         <NewTaskModal
           projects={projects}
