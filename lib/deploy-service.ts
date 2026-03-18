@@ -11,7 +11,7 @@ import os from "os";
 
 export interface DeployConfig {
   name: string;
-  type: "dotnet" | "nestjs" | "unknown";
+  type: "dotnet" | "dotnet-fdd" | "nestjs" | "unknown";
   server: string;
   user: string;
   sshKey: string;
@@ -22,6 +22,8 @@ export interface DeployConfig {
   publishDir?: string;
   serviceName?: string;
   executableName?: string;
+  selfContained?: boolean; // default true for dotnet, false for dotnet-fdd
+  fileOwner?: string; // default www-data
   // Node.js specific
   pm2Name?: string;
   backendSubdir?: string;
@@ -68,17 +70,23 @@ export const DEPLOY_CONFIGS: Record<string, DeployConfig> = {
     publishDir: "publish",
     serviceName: "kadikoy",
     executableName: "Kadikoy",
-    enabled: false, // SSH key/user unknown
+    enabled: false, // SSH erişimi başarısız — key/user bilinmiyor
   },
   sayvera: {
     name: "SayveraGlobal",
-    type: "unknown",
-    server: "",
-    user: "",
+    type: "dotnet-fdd",
+    server: "18.156.32.110",
+    user: "ubuntu",
     sshKey: "C:/Users/HP/Downloads/sayglobal.pem",
-    localDir: "",
-    remotePath: "",
-    enabled: false, // Server unknown
+    localDir: "C:/Users/HP/Desktop/sayglobal.Web/sayglobal.Web/sayglobal.Web",
+    remotePath: "/home/ubuntu/sayglobal-api",
+    projectFile: "sayglobal.Web.csproj",
+    publishDir: "publish",
+    serviceName: "sayglobal-api",
+    executableName: "sayglobal.Web.dll",
+    selfContained: false,
+    fileOwner: "ubuntu",
+    enabled: true,
   },
 };
 
@@ -212,14 +220,20 @@ async function deployDotnet(config: DeployConfig): Promise<boolean> {
   }
 
   // Step 3: Build
-  log(state, "build", "Proje derleniyor (Release, linux-x64)...");
-  const buildResult = await runCommand("dotnet", [
+  const isSelfContained = config.selfContained !== false && config.type !== "dotnet-fdd";
+  const buildLabel = isSelfContained ? "Release, linux-x64, self-contained" : "Release, framework-dependent";
+  log(state, "build", `Proje derleniyor (${buildLabel})...`);
+
+  const buildArgs = [
     "publish", config.projectFile!,
     "-c", "Release",
-    "-r", "linux-x64",
-    "--self-contained", "true",
     "-o", publishPath,
-  ], { cwd: config.localDir, timeout: 300000 });
+  ];
+  if (isSelfContained) {
+    buildArgs.push("-r", "linux-x64", "--self-contained", "true");
+  }
+
+  const buildResult = await runCommand("dotnet", buildArgs, { cwd: config.localDir, timeout: 300000 });
 
   if (buildResult.code !== 0) {
     log(state, "build", `Build basarisiz: ${buildResult.stderr}`, "error");
@@ -277,7 +291,11 @@ async function deployDotnet(config: DeployConfig): Promise<boolean> {
 
   // Step 8: Set permissions
   log(state, "permissions", "Dosya izinleri ayarlaniyor...");
-  await sshCmd(config, `sudo chown -R www-data:www-data ${config.remotePath} && sudo chmod +x ${config.remotePath}/${config.executableName}`);
+  const owner = config.fileOwner || "www-data";
+  const chmodCmd = isSelfContained
+    ? `sudo chmod +x ${config.remotePath}/${config.executableName}`
+    : `echo "framework-dependent, chmod skip"`;
+  await sshCmd(config, `sudo chown -R ${owner}:${owner} ${config.remotePath} && ${chmodCmd}`);
   log(state, "permissions", "Izinler ayarlandi", "success");
 
   // Step 9: Start service
@@ -406,6 +424,7 @@ export async function deploy(projectKey: string): Promise<DeployState> {
 
     switch (config.type) {
       case "dotnet":
+      case "dotnet-fdd":
         success = await deployDotnet(config);
         break;
       case "nestjs":
@@ -445,7 +464,7 @@ export async function checkServer(projectKey: string): Promise<{
     if (result.code !== 0) return { ok: false, error: result.stderr };
 
     let serviceStatus = "";
-    if (config.type === "dotnet" && config.serviceName) {
+    if ((config.type === "dotnet" || config.type === "dotnet-fdd") && config.serviceName) {
       const svc = await sshCmd(config, `sudo systemctl is-active ${config.serviceName}`);
       serviceStatus = svc.stdout.trim();
     } else if (config.type === "nestjs" && config.pm2Name) {
@@ -465,7 +484,7 @@ export async function getServerLogs(projectKey: string, lines = 30): Promise<str
   const config = DEPLOY_CONFIGS[projectKey];
   if (!config || !config.enabled) return "Project not configured";
 
-  if (config.type === "dotnet" && config.serviceName) {
+  if ((config.type === "dotnet" || config.type === "dotnet-fdd") && config.serviceName) {
     const result = await sshCmd(config, `sudo journalctl -u ${config.serviceName} -n ${lines} --no-pager`);
     return result.stdout || result.stderr;
   } else if (config.type === "nestjs" && config.pm2Name) {

@@ -183,7 +183,7 @@ export default function DeployPanel({ onClose }: { onClose: () => void }) {
                     <div>
                       <span className="text-sm font-medium">{p.name}</span>
                       <span className="text-[10px] text-muted ml-2">
-                        {p.type === "dotnet" ? ".NET" : p.type === "nestjs" ? "NestJS" : "?"} &middot; {p.server || "?"}
+                        {p.type === "dotnet" ? ".NET" : p.type === "dotnet-fdd" ? ".NET (FDD)" : p.type === "nestjs" ? "NestJS" : "?"} &middot; {p.server || "?"}
                       </span>
                     </div>
                     <div className="flex items-center gap-2">
