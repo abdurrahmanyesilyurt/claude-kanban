@@ -69,6 +69,15 @@ function migrate(db: Database.Database) {
   if (!colNames.has("pre_task_command")) {
     db.exec("ALTER TABLE projects ADD COLUMN pre_task_command TEXT NOT NULL DEFAULT ''");
   }
+  if (!colNames.has("project_type")) {
+    db.exec("ALTER TABLE projects ADD COLUMN project_type TEXT NOT NULL DEFAULT 'backend'");
+  }
+  if (!colNames.has("parent_project_id")) {
+    db.exec("ALTER TABLE projects ADD COLUMN parent_project_id TEXT NOT NULL DEFAULT ''");
+  }
+  if (!colNames.has("doc_output_dir")) {
+    db.exec("ALTER TABLE projects ADD COLUMN doc_output_dir TEXT NOT NULL DEFAULT ''");
+  }
 
   // Agent runs table
   db.exec(`
@@ -140,6 +149,12 @@ function migrate(db: Database.Database) {
   if (!taskColNames.has("doc_path")) {
     db.exec("ALTER TABLE tasks ADD COLUMN doc_path TEXT NOT NULL DEFAULT ''");
   }
+  if (!taskColNames.has("check_url")) {
+    db.exec("ALTER TABLE tasks ADD COLUMN check_url TEXT NOT NULL DEFAULT ''");
+  }
+  if (!taskColNames.has("generate_doc")) {
+    db.exec("ALTER TABLE tasks ADD COLUMN generate_doc INTEGER NOT NULL DEFAULT 0");
+  }
 }
 
 // --- Query helpers ---
@@ -149,15 +164,18 @@ export interface Project {
   name: string;
   path: string;
   color: string;
+  project_type: string; // backend | frontend | mobile
+  parent_project_id: string; // Backend project ID for frontend/mobile
   allowed_tools: string;
   max_turns: number;
-  extra_paths: string; // JSON array of strings
-  urls: string; // JSON array of strings
-  doc_template: string; // Document format template
-  build_command: string; // Build/verify command
-  custom_instructions: string; // Project-specific agent instructions
-  test_command: string; // Test command to run after build
-  pre_task_command: string; // Command to run before task starts
+  extra_paths: string;
+  urls: string;
+  doc_template: string;
+  doc_output_dir: string; // Directory to save generated docs
+  build_command: string;
+  custom_instructions: string;
+  test_command: string;
+  pre_task_command: string;
   created_at: string;
 }
 
@@ -173,6 +191,8 @@ export interface Task {
   max_retries: number;
   retry_count: number;
   doc_path: string;
+  check_url: string;
+  generate_doc: number;
   created_at: string;
 }
 
@@ -183,8 +203,8 @@ export function getAllProjects(): Project[] {
 export function createProject(project: Omit<Project, "created_at">): Project {
   const db = getDb();
   db.prepare(
-    "INSERT INTO projects (id, name, path, color, allowed_tools, max_turns, extra_paths, urls, doc_template, build_command, custom_instructions, test_command, pre_task_command) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-  ).run(project.id, project.name, project.path, project.color, project.allowed_tools, project.max_turns, project.extra_paths ?? "[]", project.urls ?? "[]", project.doc_template ?? "", project.build_command ?? "", project.custom_instructions ?? "", project.test_command ?? "", project.pre_task_command ?? "");
+    "INSERT INTO projects (id, name, path, color, project_type, parent_project_id, allowed_tools, max_turns, extra_paths, urls, doc_template, doc_output_dir, build_command, custom_instructions, test_command, pre_task_command) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  ).run(project.id, project.name, project.path, project.color, project.project_type ?? "backend", project.parent_project_id ?? "", project.allowed_tools, project.max_turns, project.extra_paths ?? "[]", project.urls ?? "[]", project.doc_template ?? "", project.doc_output_dir ?? "", project.build_command ?? "", project.custom_instructions ?? "", project.test_command ?? "", project.pre_task_command ?? "");
   return db.prepare("SELECT * FROM projects WHERE id = ?").get(project.id) as Project;
 }
 
@@ -196,11 +216,11 @@ export function getTasksByProject(projectId?: string): Task[] {
   return db.prepare("SELECT * FROM tasks ORDER BY created_at DESC").all() as Task[];
 }
 
-export function createTask(task: Pick<Task, "id" | "project_id" | "title" | "description"> & { priority?: string }): Task {
+export function createTask(task: Pick<Task, "id" | "project_id" | "title" | "description"> & { priority?: string; check_url?: string | null; generate_doc?: number }): Task {
   const db = getDb();
   db.prepare(
-    "INSERT INTO tasks (id, project_id, title, description, priority) VALUES (?, ?, ?, ?, ?)"
-  ).run(task.id, task.project_id, task.title, task.description, task.priority ?? "medium");
+    "INSERT INTO tasks (id, project_id, title, description, priority, check_url, generate_doc) VALUES (?, ?, ?, ?, ?, ?, ?)"
+  ).run(task.id, task.project_id, task.title, task.description, task.priority ?? "medium", task.check_url ?? null, task.generate_doc ?? 0);
   return db.prepare("SELECT * FROM tasks WHERE id = ?").get(task.id) as Task;
 }
 
@@ -377,7 +397,7 @@ export function updateWorkflowStep(id: string, fields: Partial<Omit<WorkflowStep
   return db.prepare("SELECT * FROM workflow_steps WHERE id = ?").get(id) as WorkflowStepRow | null;
 }
 
-export function updateTask(id: string, fields: Partial<Pick<Task, "status" | "progress" | "title" | "description" | "priority" | "next_task_id" | "max_retries" | "retry_count" | "doc_path">>): Task | null {
+export function updateTask(id: string, fields: Partial<Pick<Task, "status" | "progress" | "title" | "description" | "priority" | "next_task_id" | "max_retries" | "retry_count" | "doc_path" | "check_url" | "generate_doc">>): Task | null {
   const db = getDb();
   const sets: string[] = [];
   const values: unknown[] = [];

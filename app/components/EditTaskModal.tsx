@@ -17,6 +17,8 @@ export default function EditTaskModal({ task, allTasks, onClose, onUpdated }: Ed
   const [priority, setPriority] = useState<Priority>(task.priority);
   const [maxRetries, setMaxRetries] = useState(task.max_retries);
   const [nextTaskId, setNextTaskId] = useState(task.next_task_id ?? "");
+  const [checkUrl, setCheckUrl] = useState(task.check_url ?? "");
+  const [generateDoc, setGenerateDoc] = useState(task.generate_doc === 1);
   const [loading, setLoading] = useState(false);
   const [newSubtask, setNewSubtask] = useState("");
 
@@ -71,6 +73,8 @@ export default function EditTaskModal({ task, allTasks, onClose, onUpdated }: Ed
           priority,
           max_retries: maxRetries,
           next_task_id: nextTaskId || null,
+          check_url: checkUrl.trim() || null,
+          generate_doc: generateDoc ? 1 : 0,
         }),
       });
       if (res.ok) {
@@ -209,6 +213,29 @@ export default function EditTaskModal({ task, allTasks, onClose, onUpdated }: Ed
               ))}
             </select>
           </div>
+        </div>
+
+        <div>
+          <label className="text-xs text-muted mb-1 block">Kontrol URL</label>
+          <input
+            placeholder="https://site.com/hata-olan-sayfa"
+            value={checkUrl}
+            onChange={(e) => setCheckUrl(e.target.value)}
+            className="w-full bg-background border border-border rounded-md px-2.5 py-1.5 text-sm outline-none focus:border-border-hover"
+          />
+        </div>
+
+        <div className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            id="edit-generate-doc"
+            checked={generateDoc}
+            onChange={(e) => setGenerateDoc(e.target.checked)}
+            className="rounded border-border"
+          />
+          <label htmlFor="edit-generate-doc" className="text-xs text-muted cursor-pointer">
+            📄 Tamamlandığında frontend dokümanı oluştur
+          </label>
         </div>
 
         <div className="flex gap-2 justify-end">

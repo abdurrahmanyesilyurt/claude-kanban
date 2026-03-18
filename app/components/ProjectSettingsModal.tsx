@@ -1,23 +1,33 @@
 "use client";
 
 import { useState } from "react";
-import type { Project } from "@/lib/types";
-import { AVAILABLE_TOOLS } from "@/lib/types";
+import type { Project, ProjectType } from "@/lib/types";
+import { AVAILABLE_TOOLS, PROJECT_TYPE_LABELS, PROJECT_TYPE_ICONS } from "@/lib/types";
 
 interface ProjectSettingsModalProps {
   project: Project;
+  allProjects: Project[];
   onClose: () => void;
   onUpdated: (project: Project) => void;
 }
 
 export default function ProjectSettingsModal({
   project,
+  allProjects,
   onClose,
   onUpdated,
 }: ProjectSettingsModalProps) {
   const currentTools = new Set(project.allowed_tools?.split(",").filter(Boolean) ?? []);
   const [selectedTools, setSelectedTools] = useState<Set<string>>(currentTools);
   const [maxTurns, setMaxTurns] = useState(project.max_turns ?? 30);
+  const [projectType, setProjectType] = useState<ProjectType>(project.project_type as ProjectType || "backend");
+  const [parentProjectId, setParentProjectId] = useState(project.parent_project_id || "");
+  const [docOutputDir, setDocOutputDir] = useState(project.doc_output_dir || "");
+
+  // Backend projeleri listesi (parent seçimi için)
+  const backendProjects = allProjects.filter(p => p.id !== project.id && (p.project_type === "backend" || !p.project_type));
+  // Bu projenin child'ları (frontend/mobile)
+  const childProjects = allProjects.filter(p => p.parent_project_id === project.id);
   const [extraPaths, setExtraPaths] = useState<string[]>(() => {
     try { return JSON.parse(project.extra_paths || "[]"); } catch { return []; }
   });
@@ -72,11 +82,14 @@ export default function ProjectSettingsModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id: project.id,
+          project_type: projectType,
+          parent_project_id: parentProjectId,
           allowed_tools: Array.from(selectedTools).join(","),
           max_turns: maxTurns,
           extra_paths: JSON.stringify(extraPaths),
           urls: JSON.stringify(urls),
           doc_template: docTemplate,
+          doc_output_dir: docOutputDir,
           build_command: buildCommand,
           custom_instructions: customInstructions,
           test_command: testCommand,
@@ -106,6 +119,74 @@ export default function ProjectSettingsModal({
           <label className="text-xs text-muted mb-1 block">Ana Dizin</label>
           <div className="text-xs bg-background border border-border rounded-md px-2.5 py-1.5 text-muted font-mono">
             {project.path}
+          </div>
+        </div>
+
+        {/* Project Type & Relations */}
+        <div className="border-t border-border pt-4">
+          <h3 className="text-xs font-semibold text-muted mb-3">Proje Tipi & İlişkiler</h3>
+
+          <div className="flex gap-2 mb-3">
+            {(Object.keys(PROJECT_TYPE_LABELS) as ProjectType[]).map((type) => (
+              <button
+                key={type}
+                type="button"
+                onClick={() => setProjectType(type)}
+                className={`flex-1 px-3 py-2 rounded-md border text-xs transition-colors text-center ${
+                  projectType === type
+                    ? "border-indigo-500/50 bg-indigo-500/10 text-indigo-300"
+                    : "border-border bg-background text-muted hover:border-border-hover"
+                }`}
+              >
+                <div className="text-base mb-0.5">{PROJECT_TYPE_ICONS[type]}</div>
+                <div className="font-medium">{PROJECT_TYPE_LABELS[type]}</div>
+              </button>
+            ))}
+          </div>
+
+          {/* Parent Project (for frontend/mobile) */}
+          {projectType !== "backend" && (
+            <div className="mb-3">
+              <label className="text-xs text-muted mb-1 block">Bağlı Backend Proje</label>
+              <select
+                value={parentProjectId}
+                onChange={(e) => setParentProjectId(e.target.value)}
+                className="w-full bg-background border border-border rounded-md px-2.5 py-1.5 text-xs outline-none focus:border-border-hover"
+              >
+                <option value="">Seçiniz...</option>
+                {backendProjects.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Child projects display (for backend) */}
+          {projectType === "backend" && childProjects.length > 0 && (
+            <div className="mb-3">
+              <label className="text-xs text-muted mb-1.5 block">Bağlı Projeler</label>
+              <div className="flex flex-wrap gap-1.5">
+                {childProjects.map((p) => (
+                  <span key={p.id} className="text-[10px] px-2 py-0.5 rounded-full border border-border bg-background text-muted">
+                    {PROJECT_TYPE_ICONS[p.project_type as ProjectType] || "🌐"} {p.name}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Doc Output Directory */}
+          <div>
+            <label className="text-xs text-muted mb-1 block">Doküman Çıktı Dizini</label>
+            <p className="text-[10px] text-muted mb-1.5">
+              Görev tamamlandığında üretilen dokümanların kaydedileceği klasör
+            </p>
+            <input
+              value={docOutputDir}
+              onChange={(e) => setDocOutputDir(e.target.value)}
+              placeholder="Örn: C:/Users/HP/source/repos/Karbon/docs"
+              className="w-full bg-background border border-border rounded-md px-2.5 py-1.5 text-xs outline-none focus:border-border-hover font-mono"
+            />
           </div>
         </div>
 

@@ -460,6 +460,7 @@ function KanbanBoardInner() {
       {showSettings && activeProjectId && projectMap.get(activeProjectId) && (
         <ProjectSettingsModal
           project={projectMap.get(activeProjectId)!}
+          allProjects={projects}
           onClose={() => setShowSettings(false)}
           onUpdated={(updated) => {
             setProjects((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));

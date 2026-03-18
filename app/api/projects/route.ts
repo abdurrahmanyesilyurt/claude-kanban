@@ -10,7 +10,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const { name, path, color, allowed_tools, max_turns, extra_paths, urls, doc_template, build_command, custom_instructions, test_command, pre_task_command } = body;
+  const { name, path, color, project_type, parent_project_id, allowed_tools, max_turns, extra_paths, urls, doc_template, doc_output_dir, build_command, custom_instructions, test_command, pre_task_command } = body;
 
   if (!name || !path) {
     return NextResponse.json({ error: "name and path are required" }, { status: 400 });
@@ -21,11 +21,14 @@ export async function POST(req: NextRequest) {
     name,
     path,
     color: color ?? "#6366f1",
+    project_type: project_type ?? "backend",
+    parent_project_id: parent_project_id ?? "",
     allowed_tools: allowed_tools ?? "Read,Glob,Grep,Edit,Write,Bash",
     max_turns: max_turns ?? 30,
     extra_paths: JSON.stringify(extra_paths ?? []),
     urls: JSON.stringify(urls ?? []),
     doc_template: doc_template ?? "",
+    doc_output_dir: doc_output_dir ?? "",
     build_command: build_command ?? "",
     custom_instructions: custom_instructions ?? "",
     test_command: test_command ?? "",
@@ -48,7 +51,7 @@ export async function PATCH(req: NextRequest) {
   const values: unknown[] = [];
 
   for (const [key, value] of Object.entries(fields)) {
-    if (value !== undefined && ["name", "path", "color", "allowed_tools", "max_turns", "extra_paths", "urls", "doc_template", "build_command", "custom_instructions", "test_command", "pre_task_command"].includes(key)) {
+    if (value !== undefined && ["name", "path", "color", "project_type", "parent_project_id", "allowed_tools", "max_turns", "extra_paths", "urls", "doc_template", "doc_output_dir", "build_command", "custom_instructions", "test_command", "pre_task_command"].includes(key)) {
       sets.push(`${key} = ?`);
       values.push(value);
     }

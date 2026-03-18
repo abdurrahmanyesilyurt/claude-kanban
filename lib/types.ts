@@ -1,19 +1,36 @@
+export type ProjectType = "backend" | "frontend" | "mobile";
+
 export interface Project {
   id: string;
   name: string;
   path: string;
   color: string;
+  project_type: ProjectType; // backend | frontend | mobile
+  parent_project_id: string; // Backend project ID (for frontend/mobile projects)
   allowed_tools: string;
   max_turns: number;
   extra_paths: string; // JSON array of extra directory paths
   urls: string; // JSON array of reference URLs
   doc_template: string; // Document format template for agent output
+  doc_output_dir: string; // Directory to save generated docs (e.g. "C:/repos/Karbon/docs")
   build_command: string; // Build/verify command to run after task completion (e.g. "dotnet build", "npm run build")
   custom_instructions: string; // Project-specific agent instructions (coding style, conventions, etc.)
   test_command: string; // Test command to run after build (e.g. "dotnet test", "npm test")
   pre_task_command: string; // Command to run before task starts (e.g. "git pull", "npm install")
   created_at: string;
 }
+
+export const PROJECT_TYPE_LABELS: Record<ProjectType, string> = {
+  backend: "Backend",
+  frontend: "Frontend",
+  mobile: "Mobil",
+};
+
+export const PROJECT_TYPE_ICONS: Record<ProjectType, string> = {
+  backend: "🖥️",
+  frontend: "🌐",
+  mobile: "📱",
+};
 
 export const AVAILABLE_TOOLS = [
   { id: "Read", label: "Dosya Oku", desc: "Dosyaları okur" },
@@ -41,6 +58,8 @@ export interface Task {
   max_retries: number;
   retry_count: number;
   doc_path: string;
+  check_url: string; // URL to investigate/verify (e.g. "https://ekonazdijital.com/dashboard/firmalar/101")
+  generate_doc: number; // 1 = auto-generate frontend doc after task completion, 0 = skip
   created_at: string;
 }
 

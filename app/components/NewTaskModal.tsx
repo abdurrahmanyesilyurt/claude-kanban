@@ -54,6 +54,8 @@ export default function NewTaskModal({
   const [description, setDescription] = useState("");
   const [projectId, setProjectId] = useState(defaultProjectId ?? projects[0]?.id ?? "");
   const [priority, setPriority] = useState<Priority>("medium");
+  const [checkUrl, setCheckUrl] = useState("");
+  const [generateDoc, setGenerateDoc] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -69,6 +71,8 @@ export default function NewTaskModal({
           title: title.trim(),
           description: description.trim(),
           priority,
+          check_url: checkUrl.trim() || null,
+          generate_doc: generateDoc ? 1 : 0,
         }),
       });
       if (res.ok) {
@@ -144,6 +148,29 @@ export default function NewTaskModal({
             onChange={(e) => setDescription(e.target.value)}
             className="w-full bg-background border border-border rounded-md px-2.5 py-1.5 text-sm outline-none focus:border-border-hover resize-none"
           />
+        </div>
+
+        <div>
+          <label className="text-xs text-muted mb-1 block">Kontrol URL (opsiyonel)</label>
+          <input
+            placeholder="https://site.com/hata-olan-sayfa"
+            value={checkUrl}
+            onChange={(e) => setCheckUrl(e.target.value)}
+            className="w-full bg-background border border-border rounded-md px-2.5 py-1.5 text-sm outline-none focus:border-border-hover"
+          />
+        </div>
+
+        <div className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            id="generate-doc"
+            checked={generateDoc}
+            onChange={(e) => setGenerateDoc(e.target.checked)}
+            className="rounded border-border"
+          />
+          <label htmlFor="generate-doc" className="text-xs text-muted cursor-pointer">
+            📄 Tamamlandığında frontend dokümanı oluştur
+          </label>
         </div>
 
         <div>

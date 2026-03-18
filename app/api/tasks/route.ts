@@ -10,7 +10,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const { project_id, title, description, priority } = body;
+  const { project_id, title, description, priority, check_url, generate_doc } = body;
 
   if (!project_id || !title) {
     return NextResponse.json({ error: "project_id and title are required" }, { status: 400 });
@@ -22,6 +22,8 @@ export async function POST(req: NextRequest) {
     title,
     description: description ?? "",
     priority: priority ?? "medium",
+    check_url: check_url ?? null,
+    generate_doc: generate_doc ?? 0,
   });
 
   return NextResponse.json(task, { status: 201 });
