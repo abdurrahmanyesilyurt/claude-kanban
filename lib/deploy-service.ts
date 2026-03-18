@@ -182,23 +182,43 @@ function runCommand(
 }
 
 function sshCmd(config: DeployConfig, command: string): Promise<{ code: number; stdout: string; stderr: string }> {
-  return runCommand("ssh", [
-    "-o", "ConnectTimeout=10",
-    "-o", "StrictHostKeyChecking=no",
-    "-i", toMsysPath(config.sshKey),
-    `${config.user}@${config.server}`,
-    command,
-  ]);
+  // Wrap remote command in single quotes to prevent local shell from interpreting && ; etc.
+  // Escape any single quotes inside the command: ' → '\''
+  const escaped = command.replace(/'/g, "'\\''");
+  const fullCmd = `ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no -i "${toMsysPath(config.sshKey)}" ${config.user}@${config.server} '${escaped}'`;
+  return runCommandRaw(fullCmd);
+}
+
+/** Run a raw shell command string (for complex quoting scenarios) */
+function runCommandRaw(
+  cmd: string,
+  options?: { cwd?: string; timeout?: number }
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const proc = spawn("bash", ["-c", cmd], {
+      cwd: options?.cwd,
+      timeout: options?.timeout || 300000,
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    proc.stdout?.on("data", (d) => (stdout += d.toString()));
+    proc.stderr?.on("data", (d) => (stderr += d.toString()));
+
+    proc.on("close", (code) => {
+      resolve({ code: code ?? 1, stdout: stdout.trim(), stderr: stderr.trim() });
+    });
+
+    proc.on("error", (err) => {
+      resolve({ code: 1, stdout: "", stderr: err.message });
+    });
+  });
 }
 
 function scpCmd(config: DeployConfig, localPath: string, remotePath: string): Promise<{ code: number; stdout: string; stderr: string }> {
-  return runCommand("scp", [
-    "-o", "ConnectTimeout=10",
-    "-o", "StrictHostKeyChecking=no",
-    "-i", toMsysPath(config.sshKey),
-    toMsysPath(localPath),
-    `${config.user}@${config.server}:${remotePath}`,
-  ]);
+  const fullCmd = `scp -o ConnectTimeout=10 -o StrictHostKeyChecking=no -i "${toMsysPath(config.sshKey)}" "${toMsysPath(localPath)}" ${config.user}@${config.server}:${remotePath}`;
+  return runCommandRaw(fullCmd);
 }
 
 // ─── .NET Deploy ─────────────────────────────────────────────────────────
@@ -250,11 +270,9 @@ async function deployDotnet(config: DeployConfig): Promise<boolean> {
   const tarFile = path.join(os.tmpdir(), `${config.name.toLowerCase()}-deploy.tar.gz`);
   if (fs.existsSync(tarFile)) fs.unlinkSync(tarFile);
 
-  const tarResult = await runCommand("tar", [
-    "czf", toMsysPath(tarFile),
-    "-C", toMsysPath(publishPath),
-    ".",
-  ]);
+  const tarResult = await runCommandRaw(
+    `tar czf "${toMsysPath(tarFile)}" -C "${toMsysPath(publishPath)}" .`
+  );
 
   if (tarResult.code !== 0) {
     log(state, "compress", `Sikistirma basarisiz: ${tarResult.stderr}`, "error");
