@@ -1,15 +1,20 @@
-import { chromium, Browser, Page } from "playwright";
+import { chromium, Browser, BrowserContext, Page } from "playwright";
 import path from "path";
 import fs from "fs";
 
 const SCREENSHOTS_DIR = path.join(process.cwd(), "public", "screenshots");
+const BROWSER_DATA_DIR = path.join(process.cwd(), ".browser-data");
 
-// Ensure screenshots directory exists
+// Ensure directories exist
 if (!fs.existsSync(SCREENSHOTS_DIR)) {
   fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
 }
+if (!fs.existsSync(BROWSER_DATA_DIR)) {
+  fs.mkdirSync(BROWSER_DATA_DIR, { recursive: true });
+}
 
 let _browser: Browser | null = null;
+let _persistentContext: BrowserContext | null = null;
 const _pages = new Map<string, Page>();
 
 async function getBrowser(): Promise<Browser> {
@@ -21,14 +26,34 @@ async function getBrowser(): Promise<Browser> {
   return _browser;
 }
 
+// Persistent context — keeps cookies/localStorage between sessions (for WhatsApp Web etc.)
+async function getPersistentContext(): Promise<BrowserContext> {
+  if (!_persistentContext) {
+    _persistentContext = await chromium.launchPersistentContext(BROWSER_DATA_DIR, {
+      headless: false,
+      viewport: { width: 1280, height: 800 },
+    });
+  }
+  return _persistentContext;
+}
+
 // --- Session management ---
 
-export async function createSession(sessionId: string, url?: string): Promise<{ sessionId: string }> {
-  const browser = await getBrowser();
-  const context = await browser.newContext({
-    viewport: { width: 1280, height: 800 },
-  });
-  const page = await context.newPage();
+export async function createSession(sessionId: string, url?: string, persistent = false): Promise<{ sessionId: string }> {
+  let page: Page;
+
+  if (persistent) {
+    // Use persistent context — keeps login sessions (WhatsApp, etc.)
+    const context = await getPersistentContext();
+    page = await context.newPage();
+  } else {
+    const browser = await getBrowser();
+    const context = await browser.newContext({
+      viewport: { width: 1280, height: 800 },
+    });
+    page = await context.newPage();
+  }
+
   _pages.set(sessionId, page);
 
   if (url) {
@@ -41,7 +66,13 @@ export async function createSession(sessionId: string, url?: string): Promise<{ 
 export async function closeSession(sessionId: string): Promise<void> {
   const page = _pages.get(sessionId);
   if (page) {
-    await page.context().close();
+    const ctx = page.context();
+    // For persistent context, only close the page (not the context) to keep cookies/session
+    if (ctx === _persistentContext) {
+      await page.close();
+    } else {
+      await ctx.close();
+    }
     _pages.delete(sessionId);
   }
 }

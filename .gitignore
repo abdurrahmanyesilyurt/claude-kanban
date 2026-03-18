@@ -50,3 +50,8 @@ kanban.db-shm
 
 # browser session state
 .browser-session
+.browser-data
+
+# whatsapp session
+.wwebjs_auth
+.wwebjs_cache

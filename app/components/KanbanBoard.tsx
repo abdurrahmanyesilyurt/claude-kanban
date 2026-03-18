@@ -13,6 +13,7 @@ import EditTaskModal from "./EditTaskModal";
 import StatsBar from "./StatsBar";
 import WorkflowBoard from "./WorkflowBoard";
 import BrowserPanel from "./BrowserPanel";
+import WhatsAppStatus from "./WhatsAppStatus";
 
 const COLUMNS: Task["status"][] = ["todo", "in_progress", "done", "error"];
 
@@ -39,6 +40,7 @@ function KanbanBoardInner() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [viewMode, setViewMode] = useState<"kanban" | "workflows">("kanban");
   const [showBrowser, setShowBrowser] = useState(false);
+  const [showWhatsApp, setShowWhatsApp] = useState(false);
 
   const fetchData = useCallback(async () => {
     const [projRes, taskRes] = await Promise.all([
@@ -305,6 +307,12 @@ function KanbanBoardInner() {
               🌐 Browser
             </button>
             <button
+              onClick={() => setShowWhatsApp(true)}
+              className="px-3 py-1.5 text-sm border border-emerald-600/30 hover:border-emerald-500/50 rounded-md transition-colors text-emerald-400 hover:text-emerald-300"
+            >
+              💬 WhatsApp
+            </button>
+            <button
               onClick={() => setShowNewTask(true)}
               disabled={projects.length === 0}
               className="px-3 py-1.5 text-sm bg-indigo-600 hover:bg-indigo-500 rounded-md transition-colors disabled:opacity-50"
@@ -406,6 +414,9 @@ function KanbanBoardInner() {
 
       {/* Browser */}
       {showBrowser && <BrowserPanel onClose={() => setShowBrowser(false)} />}
+
+      {/* WhatsApp Status */}
+      {showWhatsApp && <WhatsAppStatus onClose={() => setShowWhatsApp(false)} />}
 
       {/* Modals (always rendered regardless of view) */}
       {showNewTask && (

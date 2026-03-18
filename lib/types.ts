@@ -40,6 +40,7 @@ export interface Task {
   next_task_id: string | null;
   max_retries: number;
   retry_count: number;
+  doc_path: string;
   created_at: string;
 }
 

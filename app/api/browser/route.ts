@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
     switch (action) {
       case "create": {
         const id = sessionId || uuidv4();
-        const result = await createSession(id, params.url);
+        const result = await createSession(id, params.url, params.persistent ?? false);
         return NextResponse.json(result);
       }
       case "close": {

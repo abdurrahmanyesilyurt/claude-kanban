@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type { Task, Project } from "@/lib/types";
 import { STATUS_COLORS, PRIORITY_COLORS, PRIORITY_LABELS } from "@/lib/types";
 
@@ -15,6 +16,31 @@ interface TaskCardProps {
 }
 
 export default function TaskCard({ task, project, onStartAgent, onStopAgent, onOpenLog, onDelete, onRestart, onEdit }: TaskCardProps) {
+  const [waSending, setWaSending] = useState(false);
+  const [waResult, setWaResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  const sendToWhatsApp = async (target: string) => {
+    setWaSending(true);
+    setWaResult(null);
+    try {
+      const res = await fetch("/api/whatsapp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          taskId: task.id,
+          target,
+          docPath: task.doc_path || undefined,
+        }),
+      });
+      const data = await res.json();
+      setWaResult({ ok: data.ok ?? false, message: data.message || data.error || "Bilinmeyen hata" });
+    } catch (e) {
+      setWaResult({ ok: false, message: String(e) });
+    } finally {
+      setWaSending(false);
+    }
+  };
+
   return (
     <div
       draggable
@@ -139,6 +165,38 @@ export default function TaskCard({ task, project, onStartAgent, onStopAgent, onO
           )}
         </div>
       </div>
+
+      {/* Doc path & WhatsApp send — only for completed tasks */}
+      {task.status === "done" && (
+        <div className="mt-2 pt-2 border-t border-border/50 space-y-1.5">
+          {task.doc_path && (
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] text-emerald-400">&#128196;</span>
+              <span className="text-[10px] text-muted font-mono truncate flex-1" title={task.doc_path}>
+                {task.doc_path.split(/[/\\]/).slice(-2).join("/")}
+              </span>
+            </div>
+          )}
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => {
+                const target = prompt("Hedef (telefon veya grup adi):", "Ivır Zıvır");
+                if (target) sendToWhatsApp(target);
+              }}
+              disabled={waSending}
+              className="text-[10px] px-2 py-0.5 rounded bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 transition-colors disabled:opacity-50 flex items-center gap-1"
+            >
+              <span>&#128172;</span>
+              {waSending ? "Gonderiliyor..." : "WhatsApp"}
+            </button>
+            {waResult && (
+              <span className={`text-[10px] ${waResult.ok ? "text-emerald-400" : "text-red-400"}`}>
+                {waResult.ok ? "Gonderildi!" : waResult.message.slice(0, 40)}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

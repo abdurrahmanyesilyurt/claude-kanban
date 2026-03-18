@@ -2,6 +2,8 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { v4 as uuidv4 } from "uuid";
 import { updateTask, createAgentRun, finishAgentRun, getDb } from "./db";
 import type { Task as DbTask } from "./db";
+import fs from "fs";
+import path from "path";
 
 // In-memory log store per task (for SSE streaming)
 const taskLogs = new Map<string, string[]>();
@@ -56,6 +58,55 @@ function pushLog(taskId: string, line: string) {
 interface AgentOptions {
   allowedTools?: string[];
   maxTurns?: number;
+}
+
+/**
+ * Detect doc files created by the agent by scanning logs for Write tool calls to .md files
+ * or by checking the docs/ directory for recently created files.
+ */
+function detectDocPath(taskId: string, projectPath: string): string | null {
+  const logs = getTaskLogs(taskId);
+
+  // Method 1: Scan logs for Write tool calls targeting .md files
+  for (const log of logs) {
+    if (log.startsWith("[tool] Write:") || log.startsWith("[tool] write:")) {
+      // Extract file_path from the JSON input
+      const match = log.match(/"file_path"\s*:\s*"([^"]+\.md)"/);
+      if (match) {
+        const filePath = match[1];
+        if (fs.existsSync(filePath)) {
+          return filePath;
+        }
+      }
+    }
+  }
+
+  // Method 2: Check docs/ directory for recently modified .md files (last 2 minutes)
+  const docsDir = path.join(projectPath, "docs");
+  if (fs.existsSync(docsDir)) {
+    try {
+      const files = fs.readdirSync(docsDir)
+        .filter((f) => f.endsWith(".md"))
+        .map((f) => {
+          const fullPath = path.join(docsDir, f);
+          const stat = fs.statSync(fullPath);
+          return { path: fullPath, mtime: stat.mtimeMs };
+        })
+        .sort((a, b) => b.mtime - a.mtime);
+
+      if (files.length > 0) {
+        const newest = files[0];
+        const twoMinutesAgo = Date.now() - 2 * 60 * 1000;
+        if (newest.mtime > twoMinutesAgo) {
+          return newest.path;
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return null;
 }
 
 function handlePostCompletion(taskId: string, result: "done" | "error") {
@@ -235,7 +286,13 @@ export async function runAgent(
     }
 
     runningAgents.delete(taskId);
-    updateTask(taskId, { status: "done", progress: 100 });
+
+    // Detect generated docs — scan logs for Write tool calls to .md files in docs/
+    const docPath = detectDocPath(taskId, projectPath);
+    updateTask(taskId, { status: "done", progress: 100, ...(docPath ? { doc_path: docPath } : {}) });
+    if (docPath) {
+      pushLog(taskId, `[agent] Dokuman olusturuldu: ${docPath}`);
+    }
     pushLog(taskId, `[agent] Task başarıyla tamamlandı`);
     finishAgentRun(runId, "done", getTaskLogs(taskId), totalCost, totalDuration);
 

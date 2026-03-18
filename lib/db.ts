@@ -137,6 +137,9 @@ function migrate(db: Database.Database) {
   if (!taskColNames.has("retry_count")) {
     db.exec("ALTER TABLE tasks ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0");
   }
+  if (!taskColNames.has("doc_path")) {
+    db.exec("ALTER TABLE tasks ADD COLUMN doc_path TEXT NOT NULL DEFAULT ''");
+  }
 }
 
 // --- Query helpers ---
@@ -169,6 +172,7 @@ export interface Task {
   next_task_id: string | null;
   max_retries: number;
   retry_count: number;
+  doc_path: string;
   created_at: string;
 }
 
@@ -373,7 +377,7 @@ export function updateWorkflowStep(id: string, fields: Partial<Omit<WorkflowStep
   return db.prepare("SELECT * FROM workflow_steps WHERE id = ?").get(id) as WorkflowStepRow | null;
 }
 
-export function updateTask(id: string, fields: Partial<Pick<Task, "status" | "progress" | "title" | "description" | "priority" | "next_task_id" | "max_retries" | "retry_count">>): Task | null {
+export function updateTask(id: string, fields: Partial<Pick<Task, "status" | "progress" | "title" | "description" | "priority" | "next_task_id" | "max_retries" | "retry_count" | "doc_path">>): Task | null {
   const db = getDb();
   const sets: string[] = [];
   const values: unknown[] = [];
