@@ -147,6 +147,12 @@ function log(state: DeployState, step: string, message: string, type: DeployLog[
   console.log(`[Deploy:${state.project}] [${type}] ${step}: ${message}`);
 }
 
+/** Convert Windows path to MSYS/Git-Bash path: C:\foo → /c/foo */
+function toMsysPath(p: string): string {
+  const normalized = p.replace(/\\/g, "/");
+  return normalized.replace(/^([A-Za-z]):/, (_, drive: string) => `/${drive.toLowerCase()}`);
+}
+
 function runCommand(
   command: string,
   args: string[],
@@ -176,23 +182,21 @@ function runCommand(
 }
 
 function sshCmd(config: DeployConfig, command: string): Promise<{ code: number; stdout: string; stderr: string }> {
-  const keyPath = config.sshKey.replace(/\\/g, "/");
   return runCommand("ssh", [
     "-o", "ConnectTimeout=10",
     "-o", "StrictHostKeyChecking=no",
-    "-i", keyPath,
+    "-i", toMsysPath(config.sshKey),
     `${config.user}@${config.server}`,
     command,
   ]);
 }
 
 function scpCmd(config: DeployConfig, localPath: string, remotePath: string): Promise<{ code: number; stdout: string; stderr: string }> {
-  const keyPath = config.sshKey.replace(/\\/g, "/");
   return runCommand("scp", [
     "-o", "ConnectTimeout=10",
     "-o", "StrictHostKeyChecking=no",
-    "-i", keyPath,
-    localPath.replace(/\\/g, "/"),
+    "-i", toMsysPath(config.sshKey),
+    toMsysPath(localPath),
     `${config.user}@${config.server}:${remotePath}`,
   ]);
 }
@@ -247,8 +251,8 @@ async function deployDotnet(config: DeployConfig): Promise<boolean> {
   if (fs.existsSync(tarFile)) fs.unlinkSync(tarFile);
 
   const tarResult = await runCommand("tar", [
-    "czf", tarFile.replace(/\\/g, "/"),
-    "-C", publishPath.replace(/\\/g, "/"),
+    "czf", toMsysPath(tarFile),
+    "-C", toMsysPath(publishPath),
     ".",
   ]);
 
