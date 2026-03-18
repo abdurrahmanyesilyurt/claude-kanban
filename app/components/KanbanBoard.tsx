@@ -14,6 +14,7 @@ import StatsBar from "./StatsBar";
 import WorkflowBoard from "./WorkflowBoard";
 import BrowserPanel from "./BrowserPanel";
 import WhatsAppStatus from "./WhatsAppStatus";
+import DeployPanel from "./DeployPanel";
 
 const COLUMNS: Task["status"][] = ["todo", "in_progress", "done", "error"];
 
@@ -41,6 +42,7 @@ function KanbanBoardInner() {
   const [viewMode, setViewMode] = useState<"kanban" | "workflows">("kanban");
   const [showBrowser, setShowBrowser] = useState(false);
   const [showWhatsApp, setShowWhatsApp] = useState(false);
+  const [showDeploy, setShowDeploy] = useState(false);
 
   const fetchData = useCallback(async () => {
     const [projRes, taskRes] = await Promise.all([
@@ -307,6 +309,12 @@ function KanbanBoardInner() {
               🌐 Browser
             </button>
             <button
+              onClick={() => setShowDeploy(true)}
+              className="px-3 py-1.5 text-sm border border-orange-600/30 hover:border-orange-500/50 rounded-md transition-colors text-orange-400 hover:text-orange-300"
+            >
+              🚀 Deploy
+            </button>
+            <button
               onClick={() => setShowWhatsApp(true)}
               className="px-3 py-1.5 text-sm border border-emerald-600/30 hover:border-emerald-500/50 rounded-md transition-colors text-emerald-400 hover:text-emerald-300"
             >
@@ -417,6 +425,9 @@ function KanbanBoardInner() {
 
       {/* WhatsApp Status */}
       {showWhatsApp && <WhatsAppStatus onClose={() => setShowWhatsApp(false)} />}
+
+      {/* Deploy Panel */}
+      {showDeploy && <DeployPanel onClose={() => setShowDeploy(false)} />}
 
       {/* Modals (always rendered regardless of view) */}
       {showNewTask && (
