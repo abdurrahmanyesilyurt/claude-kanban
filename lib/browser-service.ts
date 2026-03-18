@@ -211,6 +211,10 @@ export async function closeAll(): Promise<void> {
   for (const [id] of _pages) {
     await closeSession(id);
   }
+  if (_persistentContext) {
+    await _persistentContext.close().catch(() => {});
+    _persistentContext = null;
+  }
   if (_browser) {
     await _browser.close();
     _browser = null;

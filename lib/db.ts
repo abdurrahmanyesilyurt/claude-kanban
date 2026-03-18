@@ -155,6 +155,15 @@ function migrate(db: Database.Database) {
   if (!taskColNames.has("generate_doc")) {
     db.exec("ALTER TABLE tasks ADD COLUMN generate_doc INTEGER NOT NULL DEFAULT 0");
   }
+
+  // --- Indexes for query performance ---
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id);
+    CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+    CREATE INDEX IF NOT EXISTS idx_agent_runs_task_id ON agent_runs(task_id);
+    CREATE INDEX IF NOT EXISTS idx_workflows_project_id ON workflows(project_id);
+    CREATE INDEX IF NOT EXISTS idx_workflow_steps_workflow_id ON workflow_steps(workflow_id);
+  `);
 }
 
 // --- Query helpers ---

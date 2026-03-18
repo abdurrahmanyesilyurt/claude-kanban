@@ -19,7 +19,10 @@ export default function BrowserPanel({ onClose }: { onClose: () => void }) {
   const logRef = useRef<HTMLDivElement>(null);
 
   const log = (msg: string) => {
-    setActionLog((prev) => [...prev, `[${new Date().toLocaleTimeString("tr-TR")}] ${msg}`]);
+    setActionLog((prev) => {
+      const next = [...prev, `[${new Date().toLocaleTimeString("tr-TR")}] ${msg}`];
+      return next.length > 500 ? next.slice(-500) : next;
+    });
     setTimeout(() => logRef.current?.scrollTo(0, logRef.current.scrollHeight), 50);
   };
 

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import { useLogStream, getLogLineColor } from "../hooks/useLogStream";
 
 interface AgentRun {
   id: string;
@@ -17,28 +18,12 @@ interface AgentLogPanelProps {
 }
 
 export default function AgentLogPanel({ taskId, onClose }: AgentLogPanelProps) {
-  const [logs, setLogs] = useState<string[]>([]);
   const [runs, setRuns] = useState<AgentRun[]>([]);
   const [viewingRunId, setViewingRunId] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
-  const bottomRef = useRef<HTMLDivElement>(null);
 
-  // Live SSE logs
-  useEffect(() => {
-    if (viewingRunId) return; // Don't stream when viewing history
-    const eventSource = new EventSource(`/api/agent/stream/${taskId}`);
-
-    eventSource.onmessage = (event) => {
-      const line = JSON.parse(event.data) as string;
-      setLogs((prev) => [...prev, line]);
-    };
-
-    eventSource.onerror = () => {
-      eventSource.close();
-    };
-
-    return () => eventSource.close();
-  }, [taskId, viewingRunId]);
+  const streamUrl = viewingRunId ? null : `/api/agent/stream/${taskId}`;
+  const { logs: liveLogs, bottomRef } = useLogStream(streamUrl);
 
   // Fetch history
   useEffect(() => {
@@ -50,22 +35,9 @@ export default function AgentLogPanel({ taskId, onClose }: AgentLogPanelProps) {
     }
   }, [showHistory, taskId]);
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [logs]);
-
-  const getLineColor = (line: string) => {
-    if (line.startsWith("[error]")) return "text-red-400";
-    if (line.startsWith("[tool]")) return "text-cyan-400";
-    if (line.startsWith("[assistant]")) return "text-green-400";
-    if (line.startsWith("[result]")) return "text-yellow-400";
-    if (line.startsWith("[agent]")) return "text-indigo-400";
-    return "text-muted";
-  };
-
   const displayLogs = viewingRunId
     ? JSON.parse(runs.find((r) => r.id === viewingRunId)?.logs ?? "[]") as string[]
-    : logs;
+    : liveLogs;
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-sm">
@@ -146,7 +118,7 @@ export default function AgentLogPanel({ taskId, onClose }: AgentLogPanelProps) {
             <p className="text-muted text-xs">Loglar bekleniyor...</p>
           )}
           {displayLogs.map((line, i) => (
-            <div key={i} className={`log-line ${getLineColor(line)}`}>
+            <div key={i} className={`log-line ${getLogLineColor(line)}`}>
               {line}
             </div>
           ))}

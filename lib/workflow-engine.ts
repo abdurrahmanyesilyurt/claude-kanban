@@ -25,9 +25,25 @@ Web sayfalarını kontrol etmek için Bash ile browser-cli kullanabilirsin:
 `;
 
 // --- In-memory log pub/sub (same pattern as claude-agent.ts) ---
+const MAX_WORKFLOW_LOGS = 2000;
+const MAX_WORKFLOW_LOG_ENTRIES = 20;
 const workflowLogs = new Map<string, string[]>();
 const workflowListeners = new Map<string, Set<(line: string) => void>>();
 const runningWorkflows = new Map<string, AbortController>();
+
+/** Clean up old workflow log entries */
+function pruneOldWorkflowLogs() {
+  if (workflowLogs.size <= MAX_WORKFLOW_LOG_ENTRIES) return;
+  const runningIds = new Set(runningWorkflows.keys());
+  const completedEntries = [...workflowLogs.keys()].filter((id) => !runningIds.has(id));
+  const toRemove = completedEntries.length - MAX_WORKFLOW_LOG_ENTRIES;
+  if (toRemove > 0) {
+    for (let i = 0; i < toRemove; i++) {
+      workflowLogs.delete(completedEntries[i]);
+      workflowListeners.delete(completedEntries[i]);
+    }
+  }
+}
 
 export function getWorkflowLogs(workflowId: string): string[] {
   return workflowLogs.get(workflowId) ?? [];
@@ -38,14 +54,24 @@ export function subscribeToWorkflow(workflowId: string, listener: (line: string)
     workflowListeners.set(workflowId, new Set());
   }
   workflowListeners.get(workflowId)!.add(listener);
-  return () => { workflowListeners.get(workflowId)?.delete(listener); };
+  return () => {
+    const listeners = workflowListeners.get(workflowId);
+    listeners?.delete(listener);
+    if (listeners?.size === 0) {
+      workflowListeners.delete(workflowId);
+    }
+  };
 }
 
 function pushLog(workflowId: string, line: string) {
   if (!workflowLogs.has(workflowId)) {
     workflowLogs.set(workflowId, []);
   }
-  workflowLogs.get(workflowId)!.push(line);
+  const logs = workflowLogs.get(workflowId)!;
+  logs.push(line);
+  if (logs.length > MAX_WORKFLOW_LOGS) {
+    logs.splice(0, logs.length - MAX_WORKFLOW_LOGS);
+  }
   workflowListeners.get(workflowId)?.forEach((fn) => fn(line));
 }
 
@@ -480,6 +506,7 @@ export async function startWorkflow(workflowId: string) {
     }
   } finally {
     runningWorkflows.delete(workflowId);
+    pruneOldWorkflowLogs();
   }
 }
 

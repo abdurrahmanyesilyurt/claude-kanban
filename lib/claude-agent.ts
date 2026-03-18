@@ -6,6 +6,8 @@ import fs from "fs";
 import path from "path";
 
 // In-memory log store per task (for SSE streaming)
+const MAX_LOGS_PER_TASK = 2000;
+const MAX_LOG_ENTRIES = 50; // Max completed tasks to keep logs for
 const taskLogs = new Map<string, string[]>();
 const taskListeners = new Map<string, Set<(line: string) => void>>();
 
@@ -14,6 +16,21 @@ const runningAgents = new Map<
   string,
   { abortController: AbortController; runId: string }
 >();
+
+/** Clean up old log entries for completed (non-running) tasks */
+function pruneOldLogs() {
+  if (taskLogs.size <= MAX_LOG_ENTRIES) return;
+  const runningIds = new Set(runningAgents.keys());
+  const completedEntries = [...taskLogs.keys()].filter((id) => !runningIds.has(id));
+  const toRemove = completedEntries.length - MAX_LOG_ENTRIES;
+  if (toRemove > 0) {
+    // Remove oldest entries (first inserted)
+    for (let i = 0; i < toRemove; i++) {
+      taskLogs.delete(completedEntries[i]);
+      taskListeners.delete(completedEntries[i]);
+    }
+  }
+}
 
 export function stopAgent(taskId: string): boolean {
   const entry = runningAgents.get(taskId);
@@ -43,7 +60,12 @@ export function subscribeToTask(
   }
   taskListeners.get(taskId)!.add(listener);
   return () => {
-    taskListeners.get(taskId)?.delete(listener);
+    const listeners = taskListeners.get(taskId);
+    listeners?.delete(listener);
+    // Clean up empty listener sets
+    if (listeners?.size === 0) {
+      taskListeners.delete(taskId);
+    }
   };
 }
 
@@ -51,7 +73,12 @@ function pushLog(taskId: string, line: string) {
   if (!taskLogs.has(taskId)) {
     taskLogs.set(taskId, []);
   }
-  taskLogs.get(taskId)!.push(line);
+  const logs = taskLogs.get(taskId)!;
+  logs.push(line);
+  // Cap log size per task
+  if (logs.length > MAX_LOGS_PER_TASK) {
+    logs.splice(0, logs.length - MAX_LOGS_PER_TASK);
+  }
   taskListeners.get(taskId)?.forEach((fn) => fn(line));
 }
 
@@ -295,6 +322,7 @@ export async function runAgent(
     }
     pushLog(taskId, `[agent] Task başarıyla tamamlandı`);
     finishAgentRun(runId, "done", getTaskLogs(taskId), totalCost, totalDuration);
+    pruneOldLogs();
 
     handlePostCompletion(taskId, "done");
   } catch (err: unknown) {
@@ -316,6 +344,7 @@ export async function runAgent(
       totalCost,
       totalDuration
     );
+    pruneOldLogs();
 
     handlePostCompletion(taskId, "error");
   }

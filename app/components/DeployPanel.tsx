@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { useToast } from "./Toast";
 
 interface ProjectInfo {
   key: string;
@@ -28,6 +29,7 @@ interface DeployState {
 }
 
 export default function DeployPanel({ onClose }: { onClose: () => void }) {
+  const { toast } = useToast();
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [deployState, setDeployState] = useState<DeployState | null>(null);
@@ -46,9 +48,10 @@ export default function DeployPanel({ onClose }: { onClose: () => void }) {
   // Fetch projects list
   useEffect(() => {
     fetch("/api/deploy")
-      .then((r) => r.json())
+      .then((r) => { if (!r.ok) throw new Error(); return r.json(); })
       .then((d) => setProjects(d.projects || []))
-      .catch(() => {});
+      .catch(() => toast("Deploy projeleri yüklenemedi", "error"));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Poll deploy status when running
@@ -97,8 +100,9 @@ export default function DeployPanel({ onClose }: { onClose: () => void }) {
       setServerLogs(data.logs);
       setShowLogs(true);
     } catch {
-      setServerLogs("Log alinamadi");
-      setShowLogs(true);
+      toast("Sunucu logları alınamadı", "error");
+      setServerLogs(null);
+      setShowLogs(false);
     }
   };
 
@@ -113,6 +117,7 @@ export default function DeployPanel({ onClose }: { onClose: () => void }) {
       });
       const data = await res.json();
       if (data.ok) {
+        toast("Deploy başlatıldı", "success");
         setDeployState({
           project: key,
           status: "running",
@@ -121,8 +126,12 @@ export default function DeployPanel({ onClose }: { onClose: () => void }) {
           logs: [{ timestamp: Date.now(), step: "start", message: data.message, type: "info" }],
           currentStep: "starting",
         });
+      } else {
+        toast(`Deploy başlatılamadı: ${data.error || "Bilinmeyen hata"}`, "error");
       }
-    } catch {}
+    } catch {
+      toast("Deploy başlatılamadı", "error");
+    }
   };
 
   const statusColor = (s: string) => {

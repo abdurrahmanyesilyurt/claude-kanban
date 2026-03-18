@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { Project, Workflow } from "@/lib/types";
 import { WORKFLOW_STATUS_LABELS, WORKFLOW_STATUS_COLORS } from "@/lib/types";
+import { useToast } from "./Toast";
 import NewWorkflowModal from "./NewWorkflowModal";
 import WorkflowDetail from "./WorkflowDetail";
 
@@ -12,6 +13,7 @@ interface WorkflowBoardProps {
 }
 
 export default function WorkflowBoard({ projects, activeProjectId }: WorkflowBoardProps) {
+  const { toast } = useToast();
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [showNewModal, setShowNewModal] = useState(false);
   const [selectedWorkflow, setSelectedWorkflow] = useState<Workflow | null>(null);
@@ -21,9 +23,9 @@ export default function WorkflowBoard({ projects, activeProjectId }: WorkflowBoa
       ? `/api/workflows?project_id=${activeProjectId}`
       : "/api/workflows";
     fetch(url)
-      .then((r) => r.json())
+      .then((r) => { if (!r.ok) throw new Error(); return r.json(); })
       .then((data) => setWorkflows(data))
-      .catch(() => {});
+      .catch(() => { /* polling — silent */ });
   }, [activeProjectId]);
 
   useEffect(() => {
@@ -43,11 +45,20 @@ export default function WorkflowBoard({ projects, activeProjectId }: WorkflowBoa
   }, [workflows, selectedWorkflow]);
 
   const handleDelete = async (id: string) => {
-    await fetch("/api/workflows", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id }),
-    });
+    try {
+      const res = await fetch("/api/workflows", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      if (res.ok) {
+        toast("İş akışı silindi", "info");
+      } else {
+        toast("İş akışı silinemedi", "error");
+      }
+    } catch {
+      toast("İş akışı silinemedi", "error");
+    }
     fetchWorkflows();
   };
 

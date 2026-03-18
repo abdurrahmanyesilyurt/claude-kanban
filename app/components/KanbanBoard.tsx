@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import type { Project, Task } from "@/lib/types";
 import { STATUS_LABELS, STATUS_COLORS } from "@/lib/types";
 import { ToastProvider, useToast } from "./Toast";
+import { useTheme } from "../hooks/useTheme";
 import Sidebar from "./Sidebar";
 import TaskCard from "./TaskCard";
 import NewTaskModal from "./NewTaskModal";
@@ -28,6 +29,7 @@ export default function KanbanBoard() {
 
 function KanbanBoardInner() {
   const { toast } = useToast();
+  const { theme, toggleTheme } = useTheme();
   const [projects, setProjects] = useState<Project[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
@@ -138,12 +140,20 @@ function KanbanBoardInner() {
   };
 
   const handleRestartTask = async (taskId: string) => {
-    await fetch("/api/tasks", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: taskId, status: "todo", progress: 0 }),
-    });
-    toast("Task sıfırlandı", "info");
+    try {
+      const res = await fetch("/api/tasks", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: taskId, status: "todo", progress: 0 }),
+      });
+      if (res.ok) {
+        toast("Task sıfırlandı", "info");
+      } else {
+        toast("Task sıfırlanamadı", "error");
+      }
+    } catch {
+      toast("Task sıfırlanamadı", "error");
+    }
     fetchData();
   };
 
@@ -159,12 +169,22 @@ function KanbanBoardInner() {
       prev.map((t) => (t.id === taskId ? { ...t, status, progress: status === "todo" ? 0 : t.progress } : t))
     );
 
-    await fetch("/api/tasks", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: taskId, status, progress: status === "todo" ? 0 : undefined }),
-    });
-    toast(`Task "${task.title}" taşındı`, "info");
+    try {
+      const res = await fetch("/api/tasks", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: taskId, status, progress: status === "todo" ? 0 : undefined }),
+      });
+      if (res.ok) {
+        toast(`Task "${task.title}" taşındı`, "info");
+      } else {
+        toast("Task taşınamadı", "error");
+        fetchData(); // revert optimistic update
+      }
+    } catch {
+      toast("Task taşınamadı", "error");
+      fetchData(); // revert optimistic update
+    }
   };
 
   const handleDeleteProject = async (projectId: string) => {
@@ -180,6 +200,49 @@ function KanbanBoardInner() {
       if (activeProjectId === projectId) setActiveProjectId(null);
       toast("Proje silindi", "info");
     }
+  };
+
+  const handleExport = async () => {
+    try {
+      const url = activeProjectId
+        ? `/api/export?project_id=${activeProjectId}`
+        : "/api/export";
+      const res = await fetch(url);
+      const data = await res.json();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `kanban-export-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast("Veriler dışa aktarıldı", "success");
+    } catch {
+      toast("Dışa aktarma başarısız", "error");
+    }
+  };
+
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      const res = await fetch("/api/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (res.ok) {
+        const result = await res.json();
+        toast(`İçe aktarıldı: ${result.imported.projects} proje, ${result.imported.tasks} task`, "success");
+        fetchData();
+      } else {
+        toast("İçe aktarma başarısız", "error");
+      }
+    } catch {
+      toast("Geçersiz dosya formatı", "error");
+    }
+    e.target.value = ""; // reset file input
   };
 
   return (
@@ -288,6 +351,13 @@ function KanbanBoardInner() {
               className="hidden sm:block w-44 bg-background border border-border rounded-md px-2.5 py-1.5 text-sm outline-none focus:border-border-hover placeholder:text-muted/40"
             />
             <button
+              onClick={toggleTheme}
+              className="px-2 py-1.5 text-sm border border-border hover:border-border-hover rounded-md transition-colors text-muted hover:text-foreground"
+              title={theme === "dark" ? "Açık Tema" : "Koyu Tema"}
+            >
+              {theme === "dark" ? "\u2600\uFE0F" : "\uD83C\uDF19"}
+            </button>
+            <button
               onClick={() => setSortBy(sortBy === "date" ? "priority" : "date")}
               className="px-2.5 py-1.5 text-xs border border-border hover:border-border-hover rounded-md transition-colors text-muted hover:text-foreground"
               title={`Sıralama: ${sortBy === "date" ? "Tarih" : "Öncelik"}`}
@@ -302,6 +372,20 @@ function KanbanBoardInner() {
                 Ayarlar
               </button>
             )}
+            <button
+              onClick={handleExport}
+              className="px-2.5 py-1.5 text-xs border border-border hover:border-border-hover rounded-md transition-colors text-muted hover:text-foreground"
+              title="Verileri dışa aktar"
+            >
+              Export
+            </button>
+            <label
+              className="px-2.5 py-1.5 text-xs border border-border hover:border-border-hover rounded-md transition-colors text-muted hover:text-foreground cursor-pointer"
+              title="Verileri içe aktar"
+            >
+              Import
+              <input type="file" accept=".json" onChange={handleImport} className="hidden" />
+            </label>
             <button
               onClick={() => setShowBrowser(true)}
               className="px-3 py-1.5 text-sm border border-border hover:border-border-hover rounded-md transition-colors text-muted hover:text-foreground"

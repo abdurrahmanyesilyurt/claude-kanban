@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useLogStream, getLogLineColor } from "../hooks/useLogStream";
 
 interface WorkflowLogPanelProps {
   workflowId: string;
@@ -8,32 +8,7 @@ interface WorkflowLogPanelProps {
 }
 
 export default function WorkflowLogPanel({ workflowId, onClose }: WorkflowLogPanelProps) {
-  const [logs, setLogs] = useState<string[]>([]);
-  const bottomRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const eventSource = new EventSource(`/api/workflows/stream/${workflowId}`);
-    eventSource.onmessage = (event) => {
-      const line = JSON.parse(event.data) as string;
-      setLogs((prev) => [...prev, line]);
-    };
-    eventSource.onerror = () => eventSource.close();
-    return () => eventSource.close();
-  }, [workflowId]);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [logs]);
-
-  const getLineColor = (line: string) => {
-    if (line.includes("[error]")) return "text-red-400";
-    if (line.includes("[tool]")) return "text-cyan-400";
-    if (line.includes("[assistant]")) return "text-green-400";
-    if (line.includes("[result]")) return "text-yellow-400";
-    if (line.includes("[koordinatör]") || line.includes("[koordinatör-review]")) return "text-purple-400";
-    if (line.includes("[sistem]")) return "text-indigo-400";
-    return "text-muted";
-  };
+  const { logs, bottomRef } = useLogStream(`/api/workflows/stream/${workflowId}`);
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-sm">
@@ -54,7 +29,7 @@ export default function WorkflowLogPanel({ workflowId, onClose }: WorkflowLogPan
             <p className="text-muted text-xs">Loglar bekleniyor...</p>
           )}
           {logs.map((line, i) => (
-            <div key={i} className={`log-line ${getLineColor(line)}`}>
+            <div key={i} className={`log-line ${getLogLineColor(line)}`}>
               {line}
             </div>
           ))}

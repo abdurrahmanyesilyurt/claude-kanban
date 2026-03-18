@@ -16,17 +16,14 @@ export default function StatsBar({ projectId }: { projectId: string | null }) {
 
   useEffect(() => {
     const url = projectId ? `/api/stats?projectId=${projectId}` : "/api/stats";
-    fetch(url)
-      .then((r) => r.json())
-      .then(setStats)
-      .catch(() => {});
-
-    const interval = setInterval(() => {
+    const fetchStats = () =>
       fetch(url)
-        .then((r) => r.json())
+        .then((r) => { if (!r.ok) throw new Error(); return r.json(); })
         .then(setStats)
-        .catch(() => {});
-    }, 5000);
+        .catch(() => { /* polling — silent on failure */ });
+
+    fetchStats();
+    const interval = setInterval(fetchStats, 5000);
     return () => clearInterval(interval);
   }, [projectId]);
 
