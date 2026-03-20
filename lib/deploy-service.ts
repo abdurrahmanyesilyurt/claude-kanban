@@ -1,13 +1,35 @@
 /**
  * Deploy Service — SSH-based deployment automation
  * Supports .NET (dotnet publish + scp + systemd) and Node.js (git pull + npm + pm2)
+ * Includes deployment history tracking and rollback support.
  */
 import { spawn } from "child_process";
 import path from "path";
 import fs from "fs";
 import os from "os";
+import { v4 as uuidv4 } from "uuid";
+import {
+  createDeploymentHistory,
+  updateDeploymentHistory,
+  getDeploymentHistory,
+  getDeploymentById,
+  getLastSuccessfulDeployment,
+  type DeploymentHistory,
+} from "./db";
+
+export type { DeploymentHistory };
+export { getDeploymentHistory, getDeploymentById };
 
 // ─── Project Configurations ───────────────────────────────────────────────
+
+export interface HealthCheckConfig {
+  /** Deploy sonrası HTTP GET ile kontrol edilecek URL (2xx beklenir) */
+  url: string;
+  /** Kaç kez deneneceği (default: 3) */
+  retries?: number;
+  /** Denemeler arası bekleme süresi ms (default: 5000) */
+  intervalMs?: number;
+}
 
 export interface DeployConfig {
   name: string;
@@ -27,6 +49,10 @@ export interface DeployConfig {
   // Node.js specific
   pm2Name?: string;
   backendSubdir?: string;
+  // Backup
+  backup_dir?: string; // e.g. /var/backups/karbon — sunucuda yedek dizini
+  // HTTP Health Check (deploy sonrası otomatik)
+  healthCheck?: HealthCheckConfig;
   // Status
   enabled: boolean;
 }
@@ -44,6 +70,7 @@ export const DEPLOY_CONFIGS: Record<string, DeployConfig> = {
     publishDir: "publish",
     serviceName: "karbon",
     executableName: "Karbon",
+    backup_dir: "/var/backups/karbon",
     enabled: true,
   },
   nakliyekoop: {
@@ -56,6 +83,7 @@ export const DEPLOY_CONFIGS: Record<string, DeployConfig> = {
     remotePath: "~/nakliyekoop-monorepo",
     pm2Name: "nakliyekoop-api",
     backendSubdir: "apps/nakliyekoop-backend",
+    backup_dir: "/var/backups/nakliyekoop",
     enabled: true,
   },
   kadikoy: {
@@ -70,6 +98,7 @@ export const DEPLOY_CONFIGS: Record<string, DeployConfig> = {
     publishDir: "publish",
     serviceName: "kadikoy",
     executableName: "Kadikoy",
+    backup_dir: "/var/backups/kadikoy",
     enabled: false, // SSH erişimi başarısız — key/user bilinmiyor
   },
   sayvera: {
@@ -86,6 +115,7 @@ export const DEPLOY_CONFIGS: Record<string, DeployConfig> = {
     executableName: "sayglobal.Web.dll",
     selfContained: false,
     fileOwner: "ubuntu",
+    backup_dir: "/var/backups/sayvera",
     enabled: true,
   },
 };
@@ -106,6 +136,8 @@ export interface DeployState {
   finishedAt: number | null;
   logs: DeployLog[];
   currentStep: string;
+  backup_path?: string;        // Bu deploy için alınan yedek dizini
+  rollback_available?: boolean; // Rollback yapılabilir mi
 }
 
 const g = globalThis as unknown as {
@@ -140,6 +172,12 @@ export function getAllDeployStatuses(): Record<string, DeployState> {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
+
+/** Yerel git repo'sunun HEAD commit hash'ini döner (kısa format, 8 karakter) */
+async function getLocalGitCommit(dir: string): Promise<string> {
+  const result = await runCommand("git", ["-C", dir, "rev-parse", "HEAD"], { timeout: 10000 });
+  return result.code === 0 ? result.stdout.trim().substring(0, 8) : "";
+}
 
 function log(state: DeployState, step: string, message: string, type: DeployLog["type"] = "info") {
   state.currentStep = step;
@@ -216,14 +254,251 @@ function runCommandRaw(
   });
 }
 
+// ─── HTTP Health Check ────────────────────────────────────────────────────
+
+/**
+ * Deploy edilen servise HTTP GET atar, 2xx yanıt beklenir.
+ * Tüm retry'lar tükendikten sonra başarısız olursa { ok: false } döner.
+ *
+ * @param url       - Kontrol edilecek endpoint
+ * @param retries   - Toplam deneme sayısı (default: 3)
+ * @param intervalMs - Denemeler arası bekleme ms (default: 5000)
+ */
+export async function performHealthCheck(
+  url: string,
+  retries = 3,
+  intervalMs = 5000
+): Promise<{ ok: boolean; status?: number; error?: string }> {
+  let lastError = "bilinmeyen hata";
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10000); // 10s timeout/deneme
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(timer);
+
+      if (res.status >= 200 && res.status < 300) {
+        return { ok: true, status: res.status };
+      }
+
+      lastError = `HTTP ${res.status} ${res.statusText}`;
+      console.log(`[HealthCheck] Deneme ${attempt}/${retries}: ${lastError}`);
+    } catch (e: unknown) {
+      lastError = e instanceof Error ? e.message : String(e);
+      console.log(`[HealthCheck] Deneme ${attempt}/${retries} hata: ${lastError}`);
+    }
+
+    if (attempt < retries) {
+      await new Promise((r) => setTimeout(r, intervalMs));
+    }
+  }
+
+  return {
+    ok: false,
+    error: `Health check basarisiz — ${lastError} (${retries} deneme sonrasi)`,
+  };
+}
+
+// ─── Auto-Rollback Notification ───────────────────────────────────────────
+
+/**
+ * Otomatik rollback tetiklendiğinde WhatsApp bildirimi gönderir.
+ * DEPLOY_NOTIFY_NUMBER env değişkeni tanımlıysa ve WhatsApp bağlıysa çalışır.
+ * Hata olursa sessizce geçer — deploy akışını bozmaz.
+ */
+async function sendAutoRollbackNotification(
+  projectName: string,
+  healthCheckUrl: string,
+  historyId?: string
+): Promise<void> {
+  const notifyTarget = process.env.DEPLOY_NOTIFY_NUMBER;
+  if (!notifyTarget) return;
+
+  try {
+    // Dynamic import — circular dependency'yi önler
+    const { sendMessage, getStatus } = await import("./whatsapp-service");
+    const status = getStatus();
+    if (!status.connected) return; // WhatsApp bağlı değil, sessizce geç
+
+    const lines = [
+      `🚨 *Auto-Rollback Tetiklendi*`,
+      ``,
+      `*Proje:* ${projectName}`,
+      `*Health Check URL:* ${healthCheckUrl}`,
+      historyId ? `*Deploy ID:* \`${historyId.slice(0, 8)}\`` : "",
+      `*Zaman:* ${new Date().toLocaleString("tr-TR")}`,
+      ``,
+      `Deploy sonrası HTTP health check tüm denemeler tükendikten sonra başarısız oldu.`,
+      `Önceki sürüme otomatik rollback uygulandı.`,
+    ].filter(Boolean);
+
+    await sendMessage(notifyTarget, lines.join("\n"));
+    console.log(`[Deploy] Auto-rollback WhatsApp bildirimi gönderildi → ${notifyTarget}`);
+  } catch (e) {
+    console.error("[Deploy] WhatsApp bildirim gönderilemedi:", e);
+    // Hata durumunda sessizce geç
+  }
+}
+
 function scpCmd(config: DeployConfig, localPath: string, remotePath: string): Promise<{ code: number; stdout: string; stderr: string }> {
   const fullCmd = `scp -o ConnectTimeout=10 -o StrictHostKeyChecking=no -i "${toMsysPath(config.sshKey)}" "${toMsysPath(localPath)}" ${config.user}@${config.server}:${remotePath}`;
   return runCommandRaw(fullCmd);
 }
 
+// ─── Backup & Rollback ───────────────────────────────────────────────────
+
+/**
+ * Deploy başlamadan önce sunucudaki mevcut versiyonu yedekler.
+ * Sunucuda: /var/backups/{project}/{timestamp}/ dizinine kopyalar.
+ * Returns: backup path ya da null (backup_dir yoksa / hata olursa)
+ */
+async function backupCurrentVersion(config: DeployConfig, state: DeployState): Promise<string | null> {
+  if (!config.backup_dir) {
+    log(state, "backup", "backup_dir tanimlanmamis, yedekleme atlaniyor", "warn");
+    return null;
+  }
+
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19); // 2024-01-15T12-30-00
+  const backupPath = `${config.backup_dir}/${timestamp}`;
+
+  log(state, "backup", `Mevcut surum yedekleniyor: ${backupPath}`);
+
+  // bash -c ile Windows uyumlu — && zinciri tek SSH oturumunda
+  const result = await sshCmd(config,
+    `bash -c 'sudo mkdir -p ${backupPath} && sudo cp -rp ${config.remotePath}/. ${backupPath}/'`
+  );
+
+  if (result.code !== 0) {
+    log(state, "backup", `Yedekleme basarisiz (deploy devam ediyor): ${result.stderr}`, "warn");
+    return null;
+  }
+
+  log(state, "backup", `Yedekleme tamamlandi: ${backupPath}`, "success");
+  return backupPath;
+}
+
+/**
+ * Belirtilen backup dizininden geri yükler ve servisi restart eder.
+ * Hem dotnet hem dotnet-fdd için çalışır.
+ */
+async function performRollback(config: DeployConfig, state: DeployState, backupPath: string): Promise<boolean> {
+  log(state, "rollback", `Rollback baslatiliyor: ${backupPath}`, "warn");
+
+  if (config.type === "dotnet" || config.type === "dotnet-fdd") {
+    if (!config.serviceName) {
+      log(state, "rollback", "serviceName tanimlanmamis, rollback yapilamiyor", "error");
+      return false;
+    }
+
+    const result = await sshCmd(config,
+      `bash -c 'sudo systemctl stop ${config.serviceName} && sudo rm -rf ${config.remotePath}/* && sudo cp -rp ${backupPath}/. ${config.remotePath}/ && sudo systemctl start ${config.serviceName}'`
+    );
+
+    if (result.code !== 0) {
+      log(state, "rollback", `Rollback basarisiz: ${result.stderr}`, "error");
+      return false;
+    }
+
+    log(state, "rollback", `Rollback tamamlandi — ${backupPath} geri yuklendi`, "success");
+    return true;
+
+  } else if (config.type === "nestjs") {
+    if (!config.pm2Name) {
+      log(state, "rollback", "pm2Name tanimlanmamis, rollback yapilamiyor", "error");
+      return false;
+    }
+    // NestJS: dosyaları geri yükle, sonra PM2 restart
+    const result = await sshCmd(config,
+      `bash -c 'sudo cp -rp ${backupPath}/. ${config.remotePath}/ && pm2 restart ${config.pm2Name}'`
+    );
+
+    if (result.code !== 0) {
+      log(state, "rollback", `Rollback basarisiz: ${result.stderr}`, "error");
+      return false;
+    }
+
+    log(state, "rollback", `Rollback tamamlandi — PM2 yeniden baslatildi`, "success");
+    return true;
+  }
+
+  log(state, "rollback", `Desteklenmeyen proje tipi rollback icin: ${config.type}`, "error");
+  return false;
+}
+
+/**
+ * PUBLIC: Belirtilen proje için en son backup dizininden rollback yapar.
+ */
+export async function rollbackDeploy(projectKey: string): Promise<{
+  success: boolean;
+  backup_path?: string;
+  message: string;
+}> {
+  const config = DEPLOY_CONFIGS[projectKey];
+  if (!config) return { success: false, message: `Bilinmeyen proje: ${projectKey}` };
+  if (!config.enabled) return { success: false, message: `${config.name} projesi aktif degil` };
+  if (!config.backup_dir) return { success: false, message: "backup_dir tanimlanmamis" };
+
+  // Sunucudaki en son backup klasörünü bul
+  const listResult = await sshCmd(config,
+    `bash -c 'sudo ls -1t ${config.backup_dir} 2>/dev/null | head -1'`
+  );
+
+  if (listResult.code !== 0 || !listResult.stdout.trim()) {
+    return { success: false, message: "Hicbir yedek bulunamadi" };
+  }
+
+  const latestDir = listResult.stdout.trim();
+  const backupPath = `${config.backup_dir}/${latestDir}`;
+
+  // Geçici state ile rollback logu tut
+  const state = getState(projectKey);
+
+  const ok = await performRollback(config, state, backupPath);
+  if (ok) {
+    return { success: true, backup_path: backupPath, message: `Rollback basarili: ${backupPath}` };
+  } else {
+    return { success: false, backup_path: backupPath, message: "Rollback sirasinda hata olustu, loglara bakin" };
+  }
+}
+
+/**
+ * PUBLIC: Sunucudaki backup listesini döndürür (en yeniden eskiye).
+ */
+export async function listBackups(projectKey: string): Promise<{
+  success: boolean;
+  backups: string[];
+  error?: string;
+}> {
+  const config = DEPLOY_CONFIGS[projectKey];
+  if (!config) return { success: false, backups: [], error: `Bilinmeyen proje: ${projectKey}` };
+  if (!config.backup_dir) return { success: false, backups: [], error: "backup_dir tanimlanmamis" };
+
+  const result = await sshCmd(config,
+    `bash -c 'sudo ls -1t ${config.backup_dir} 2>/dev/null || true'`
+  );
+
+  if (result.code !== 0) {
+    return { success: false, backups: [], error: result.stderr };
+  }
+
+  const backups = result.stdout
+    .split("\n")
+    .map((d) => d.trim())
+    .filter(Boolean)
+    .map((d) => `${config.backup_dir}/${d}`);
+
+  return { success: true, backups };
+}
+
 // ─── .NET Deploy ─────────────────────────────────────────────────────────
 
-async function deployDotnet(config: DeployConfig): Promise<boolean> {
+async function deployDotnet(
+  config: DeployConfig,
+  backupPath?: string | null,
+  historyId?: string,
+  healthCheckCfg?: HealthCheckConfig
+): Promise<boolean> {
   const state = getState(config.name.toLowerCase().replace(/\s/g, ""));
 
   // Step 1: SSH connectivity check
@@ -329,19 +604,57 @@ async function deployDotnet(config: DeployConfig): Promise<boolean> {
   }
   log(state, "start-service", "Service baslatildi", "success");
 
-  // Step 10: Health check
-  log(state, "health-check", "Uygulama kontrol ediliyor...");
+  // Step 10: Service durumu kontrolü
+  log(state, "health-check", "Servis durumu kontrol ediliyor...");
   await new Promise((r) => setTimeout(r, 3000));
-  const healthResult = await sshCmd(config, `sudo systemctl is-active ${config.serviceName}`);
-  if (healthResult.stdout.trim() === "active") {
-    log(state, "health-check", "Service calisiyor!", "success");
-  } else {
-    log(state, "health-check", `Service durumu: ${healthResult.stdout}`, "error");
+  const svcResult = await sshCmd(config, `sudo systemctl is-active ${config.serviceName}`);
+  if (svcResult.stdout.trim() !== "active") {
+    log(state, "health-check", `Servis aktif degil: ${svcResult.stdout}`, "error");
 
-    // Get last logs for debugging
+    // Son loglar
     const logsResult = await sshCmd(config, `sudo journalctl -u ${config.serviceName} -n 20 --no-pager`);
     log(state, "health-check", `Son loglar:\n${logsResult.stdout}`, "error");
+
+    // Otomatik rollback
+    if (backupPath) {
+      log(state, "health-check", "Auto-rollback triggered due to health check failure", "warn");
+      await performRollback(config, state, backupPath);
+      await sendAutoRollbackNotification(config.name, `systemctl:${config.serviceName}`, historyId);
+    } else {
+      log(state, "health-check", "Health check basarisiz — yedek yok, rollback atlanıyor", "warn");
+    }
+
+    if (fs.existsSync(tarFile)) fs.unlinkSync(tarFile);
     return false;
+  }
+  log(state, "health-check", "Servis aktif!", "success");
+
+  // Step 11: HTTP Health Check (config veya override ile tanımlıysa)
+  const hcCfg = healthCheckCfg ?? config.healthCheck;
+  if (hcCfg) {
+    const retries = hcCfg.retries ?? 3;
+    const intervalMs = hcCfg.intervalMs ?? 5000;
+    log(state, "health-check", `HTTP health check baslatiliyor: ${hcCfg.url} (${retries} deneme, ${intervalMs}ms aralik)`);
+
+    // Servis ayağa kalkması için kısa bekleme
+    await new Promise((r) => setTimeout(r, intervalMs));
+
+    const hcResult = await performHealthCheck(hcCfg.url, retries, intervalMs);
+    if (!hcResult.ok) {
+      log(state, "health-check", `HTTP health check basarisiz: ${hcResult.error}`, "error");
+
+      if (backupPath) {
+        log(state, "health-check", "Auto-rollback triggered due to health check failure", "warn");
+        await performRollback(config, state, backupPath);
+        await sendAutoRollbackNotification(config.name, hcCfg.url, historyId);
+      } else {
+        log(state, "health-check", "HTTP health check basarisiz — yedek yok, rollback atlanıyor", "warn");
+      }
+
+      if (fs.existsSync(tarFile)) fs.unlinkSync(tarFile);
+      return false;
+    }
+    log(state, "health-check", `HTTP health check basarili (HTTP ${hcResult.status})`, "success");
   }
 
   // Cleanup local tar
@@ -352,7 +665,12 @@ async function deployDotnet(config: DeployConfig): Promise<boolean> {
 
 // ─── NestJS/Node.js Deploy ───────────────────────────────────────────────
 
-async function deployNestjs(config: DeployConfig): Promise<boolean> {
+async function deployNestjs(
+  config: DeployConfig,
+  backupPath?: string | null,
+  historyId?: string,
+  healthCheckCfg?: HealthCheckConfig
+): Promise<boolean> {
   const state = getState(config.name.toLowerCase().replace(/\s/g, ""));
 
   // Step 1: SSH check
@@ -404,17 +722,51 @@ async function deployNestjs(config: DeployConfig): Promise<boolean> {
   }
   log(state, "restart", "PM2 restart tamamlandi", "success");
 
-  // Step 6: Health check
-  log(state, "health-check", "Uygulama kontrol ediliyor...");
+  // Step 6: PM2 durum kontrolü
+  log(state, "health-check", "PM2 durumu kontrol ediliyor...");
   await new Promise((r) => setTimeout(r, 3000));
-  const healthResult = await sshCmd(config, `pm2 show ${config.pm2Name} --no-color | grep status`);
-  if (healthResult.stdout.includes("online")) {
-    log(state, "health-check", "Uygulama calisiyor!", "success");
-  } else {
-    log(state, "health-check", `PM2 durumu: ${healthResult.stdout}`, "error");
+  const pm2Result = await sshCmd(config, `pm2 show ${config.pm2Name} --no-color | grep status`);
+  if (!pm2Result.stdout.includes("online")) {
+    log(state, "health-check", `PM2 durumu: ${pm2Result.stdout}`, "error");
     const logsResult = await sshCmd(config, `pm2 logs ${config.pm2Name} --lines 15 --nostream`);
     log(state, "health-check", `Son loglar:\n${logsResult.stdout}`, "error");
+
+    if (backupPath) {
+      log(state, "health-check", "Auto-rollback triggered due to health check failure", "warn");
+      await performRollback(config, state, backupPath);
+      await sendAutoRollbackNotification(config.name, `pm2:${config.pm2Name}`, historyId);
+    } else {
+      log(state, "health-check", "Health check basarisiz — yedek yok, rollback atlanıyor", "warn");
+    }
+
     return false;
+  }
+  log(state, "health-check", "PM2 online!", "success");
+
+  // Step 7: HTTP Health Check (config veya override ile tanımlıysa)
+  const hcCfg = healthCheckCfg ?? config.healthCheck;
+  if (hcCfg) {
+    const retries = hcCfg.retries ?? 3;
+    const intervalMs = hcCfg.intervalMs ?? 5000;
+    log(state, "health-check", `HTTP health check baslatiliyor: ${hcCfg.url} (${retries} deneme, ${intervalMs}ms aralik)`);
+
+    await new Promise((r) => setTimeout(r, intervalMs));
+
+    const hcResult = await performHealthCheck(hcCfg.url, retries, intervalMs);
+    if (!hcResult.ok) {
+      log(state, "health-check", `HTTP health check basarisiz: ${hcResult.error}`, "error");
+
+      if (backupPath) {
+        log(state, "health-check", "Auto-rollback triggered due to health check failure", "warn");
+        await performRollback(config, state, backupPath);
+        await sendAutoRollbackNotification(config.name, hcCfg.url, historyId);
+      } else {
+        log(state, "health-check", "HTTP health check basarisiz — yedek yok, rollback atlanıyor", "warn");
+      }
+
+      return false;
+    }
+    log(state, "health-check", `HTTP health check basarili (HTTP ${hcResult.status})`, "success");
   }
 
   return true;
@@ -422,7 +774,10 @@ async function deployNestjs(config: DeployConfig): Promise<boolean> {
 
 // ─── Main Deploy Function ────────────────────────────────────────────────
 
-export async function deploy(projectKey: string): Promise<DeployState> {
+export async function deploy(
+  projectKey: string,
+  healthCheckOverride?: HealthCheckConfig
+): Promise<DeployState> {
   const config = DEPLOY_CONFIGS[projectKey];
   if (!config) throw new Error(`Unknown project: ${projectKey}`);
   if (!config.enabled) throw new Error(`Project ${config.name} is not enabled for deployment`);
@@ -438,19 +793,48 @@ export async function deploy(projectKey: string): Promise<DeployState> {
   state.finishedAt = null;
   state.logs = [];
   state.currentStep = "starting";
+  state.backup_path = undefined;
+  state.rollback_available = false;
 
-  log(state, "start", `${config.name} deploy baslatiliyor...`);
+  // ─── DB: deployment history kaydı oluştur ───────────────────────────
+  const historyId = uuidv4();
+  createDeploymentHistory({
+    id: historyId,
+    project_key: projectKey,
+    deploy_type: config.type,
+    triggered_by: "deploy",
+    rollback_of: "",
+  });
+
+  log(state, "start", `${config.name} deploy baslatiliyor... [history: ${historyId.slice(0, 8)}]`);
 
   try {
+    // Yerel git commit hash'ini al
+    const commitHash = await getLocalGitCommit(config.localDir);
+    if (commitHash) {
+      log(state, "git-info", `Yerel commit: ${commitHash}`);
+    }
+
+    // Backup: deploy başlamadan önce mevcut sürümü yedekle
+    const backupPath = await backupCurrentVersion(config, state);
+    state.backup_path = backupPath ?? undefined;
+    state.rollback_available = backupPath !== null;
+
+    // DB'yi backup path ve commit hash ile güncelle
+    updateDeploymentHistory(historyId, {
+      commit_hash: commitHash,
+      backup_path: backupPath ?? "",
+    });
+
     let success = false;
 
     switch (config.type) {
       case "dotnet":
       case "dotnet-fdd":
-        success = await deployDotnet(config);
+        success = await deployDotnet(config, backupPath, historyId, healthCheckOverride);
         break;
       case "nestjs":
-        success = await deployNestjs(config);
+        success = await deployNestjs(config, backupPath, historyId, healthCheckOverride);
         break;
       default:
         log(state, "error", `Desteklenmeyen proje tipi: ${config.type}`, "error");
@@ -459,15 +843,130 @@ export async function deploy(projectKey: string): Promise<DeployState> {
 
     state.status = success ? "success" : "failed";
     state.finishedAt = Date.now();
-    const duration = ((state.finishedAt - state.startedAt!) / 1000).toFixed(1);
-    log(state, "done", `Deploy ${success ? "basarili" : "basarisiz"} (${duration}s)`, success ? "success" : "error");
+    const durationMs = state.finishedAt - state.startedAt!;
+    const duration = (durationMs / 1000).toFixed(1);
+
+    if (success) {
+      const backupInfo = state.backup_path ? ` | Yedek: ${state.backup_path}` : "";
+      log(state, "done", `Deploy basarili (${duration}s)${backupInfo}`, "success");
+    } else {
+      const rollbackInfo = state.rollback_available
+        ? ` | Rollback icin /api/deployments/${projectKey}/rollback endpoint'ini kullanin`
+        : "";
+      log(state, "done", `Deploy basarisiz (${duration}s)${rollbackInfo}`, "error");
+    }
+
+    // ─── DB: sonuç kaydını güncelle ─────────────────────────────────
+    updateDeploymentHistory(historyId, {
+      status: success ? "success" : "failed",
+      finished_at: new Date().toISOString(),
+      duration_ms: durationMs,
+      logs: JSON.stringify(state.logs),
+    });
   } catch (e) {
     state.status = "failed";
     state.finishedAt = Date.now();
     log(state, "error", `Beklenmeyen hata: ${e}`, "error");
+
+    updateDeploymentHistory(historyId, {
+      status: "failed",
+      finished_at: new Date().toISOString(),
+      duration_ms: state.finishedAt - state.startedAt!,
+      logs: JSON.stringify(state.logs),
+    });
   }
 
   return state;
+}
+
+// ─── Rollback by Deployment ID (DB-driven) ───────────────────────────────
+
+/**
+ * Belirtilen deploymentId kaydına ait backup_path kullanarak rollback yapar.
+ * - deploymentId: geri dönülecek deployment history kaydının ID'si
+ *   (o kaydın backup_path'ı, bu deploy öncesindeki versiyona işaret eder)
+ */
+export async function rollbackDeployment(deploymentId: string): Promise<{
+  success: boolean;
+  message: string;
+  rollbackHistoryId?: string;
+}> {
+  // 1. Hedef deployment kaydını DB'den al
+  const target = getDeploymentById(deploymentId);
+  if (!target) {
+    return { success: false, message: `Deployment bulunamadi: ${deploymentId}` };
+  }
+
+  if (target.status === "running") {
+    return { success: false, message: "Deploy hala calisiyor, rollback yapilamiyor" };
+  }
+
+  const config = DEPLOY_CONFIGS[target.project_key];
+  if (!config) {
+    return { success: false, message: `Proje konfigurasyon bulunamadi: ${target.project_key}` };
+  }
+  if (!config.enabled) {
+    return { success: false, message: `${config.name} projesi aktif degil` };
+  }
+
+  // 2. Rollback için backup path'i belirle
+  //    target.backup_path = bu deployment'tan ÖNCE alınan yedek (önceki versiyon)
+  const backupPath = target.backup_path;
+  if (!backupPath) {
+    return {
+      success: false,
+      message: `Bu deployment icin yedek yok (backup_path bos). Manuel rollback gerekiyor.`,
+    };
+  }
+
+  // 3. Rollback için yeni history kaydı oluştur
+  const rollbackHistoryId = uuidv4();
+  createDeploymentHistory({
+    id: rollbackHistoryId,
+    project_key: target.project_key,
+    deploy_type: config.type,
+    triggered_by: "rollback",
+    rollback_of: deploymentId,
+  });
+
+  // 4. State hazırla (loglama için)
+  const state = getState(target.project_key);
+  const rollbackStartedAt = Date.now();
+
+  log(state, "rollback-start", `Rollback baslatiliyor — hedef deployment: ${deploymentId.slice(0, 8)}`, "warn");
+  log(state, "rollback-start", `Yedek: ${backupPath}`, "info");
+
+  // 5. Rollback işlemi
+  const ok = await performRollback(config, state, backupPath);
+
+  const durationMs = Date.now() - rollbackStartedAt;
+  const rollbackStatus = ok ? "success" : "failed";
+
+  if (ok) {
+    log(state, "rollback-done", `Rollback basarili (${(durationMs / 1000).toFixed(1)}s)`, "success");
+    // Önceki başarılı deployment'ı "rolled_back" olarak işaretle
+    updateDeploymentHistory(deploymentId, { status: "rolled_back" });
+  } else {
+    log(state, "rollback-done", `Rollback basarisiz (${(durationMs / 1000).toFixed(1)}s)`, "error");
+  }
+
+  // 6. Rollback history kaydını güncelle
+  updateDeploymentHistory(rollbackHistoryId, {
+    status: rollbackStatus,
+    finished_at: new Date().toISOString(),
+    duration_ms: durationMs,
+    logs: JSON.stringify(state.logs),
+    backup_path: backupPath,
+    commit_hash: target.commit_hash, // hangi versiyona döndük
+  });
+
+  return {
+    success: ok,
+    message: ok
+      ? `Rollback basarili — ${target.project_key} onceki versiyona dondu`
+      : "Rollback basarisiz, loglara bakin",
+    rollbackHistoryId,
+  };
 }
 
 // ─── Quick Server Check ──────────────────────────────────────────────────

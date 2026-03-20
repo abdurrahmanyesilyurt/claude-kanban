@@ -156,6 +156,29 @@ function migrate(db: Database.Database) {
     db.exec("ALTER TABLE tasks ADD COLUMN generate_doc INTEGER NOT NULL DEFAULT 0");
   }
 
+  // Workflow step migrations
+  const stepCols = db.prepare("PRAGMA table_info(workflow_steps)").all() as { name: string }[];
+  const stepColNames = new Set(stepCols.map((c) => c.name));
+  if (!stepColNames.has("started_at")) {
+    db.exec("ALTER TABLE workflow_steps ADD COLUMN started_at TEXT DEFAULT NULL");
+  }
+  if (!stepColNames.has("finished_at")) {
+    db.exec("ALTER TABLE workflow_steps ADD COLUMN finished_at TEXT DEFAULT NULL");
+  }
+  if (!stepColNames.has("completed_at")) {
+    db.exec("ALTER TABLE workflow_steps ADD COLUMN completed_at TEXT DEFAULT NULL");
+  }
+
+  // Workflow migrations
+  const wfCols = db.prepare("PRAGMA table_info(workflows)").all() as { name: string }[];
+  const wfColNames = new Set(wfCols.map((c) => c.name));
+  if (!wfColNames.has("started_at")) {
+    db.exec("ALTER TABLE workflows ADD COLUMN started_at TEXT DEFAULT NULL");
+  }
+  if (!wfColNames.has("completed_at")) {
+    db.exec("ALTER TABLE workflows ADD COLUMN completed_at TEXT DEFAULT NULL");
+  }
+
   // --- Indexes for query performance ---
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id);
@@ -163,6 +186,27 @@ function migrate(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_agent_runs_task_id ON agent_runs(task_id);
     CREATE INDEX IF NOT EXISTS idx_workflows_project_id ON workflows(project_id);
     CREATE INDEX IF NOT EXISTS idx_workflow_steps_workflow_id ON workflow_steps(workflow_id);
+  `);
+
+  // --- Deployment history table ---
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS deployment_history (
+      id TEXT PRIMARY KEY,
+      project_key TEXT NOT NULL,
+      deploy_type TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'running',
+      commit_hash TEXT NOT NULL DEFAULT '',
+      backup_path TEXT NOT NULL DEFAULT '',
+      triggered_by TEXT NOT NULL DEFAULT 'deploy',
+      rollback_of TEXT NOT NULL DEFAULT '',
+      started_at TEXT NOT NULL DEFAULT (datetime('now')),
+      finished_at TEXT,
+      duration_ms INTEGER NOT NULL DEFAULT 0,
+      logs TEXT NOT NULL DEFAULT '[]'
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_deployment_history_project ON deployment_history(project_key);
+    CREATE INDEX IF NOT EXISTS idx_deployment_history_status ON deployment_history(status);
   `);
 }
 
@@ -229,7 +273,7 @@ export function createTask(task: Pick<Task, "id" | "project_id" | "title" | "des
   const db = getDb();
   db.prepare(
     "INSERT INTO tasks (id, project_id, title, description, priority, check_url, generate_doc) VALUES (?, ?, ?, ?, ?, ?, ?)"
-  ).run(task.id, task.project_id, task.title, task.description, task.priority ?? "medium", task.check_url ?? null, task.generate_doc ?? 0);
+  ).run(task.id, task.project_id, task.title, task.description, task.priority ?? "medium", task.check_url ?? "", task.generate_doc ?? 0);
   return db.prepare("SELECT * FROM tasks WHERE id = ?").get(task.id) as Task;
 }
 
@@ -323,6 +367,8 @@ export interface WorkflowRow {
   status: string;
   shared_memory: string;
   plan: string;
+  started_at: string | null;
+  completed_at: string | null;
   created_at: string;
 }
 
@@ -336,6 +382,9 @@ export interface WorkflowStepRow {
   depends_on: string;
   agent_summary: string;
   order_index: number;
+  started_at: string | null;
+  finished_at: string | null;
+  completed_at: string | null;
   created_at: string;
 }
 
@@ -404,6 +453,88 @@ export function updateWorkflowStep(id: string, fields: Partial<Omit<WorkflowStep
   values.push(id);
   db.prepare(`UPDATE workflow_steps SET ${sets.join(", ")} WHERE id = ?`).run(...values);
   return db.prepare("SELECT * FROM workflow_steps WHERE id = ?").get(id) as WorkflowStepRow | null;
+}
+
+// --- Deployment History helpers ---
+
+export interface DeploymentHistory {
+  id: string;
+  project_key: string;
+  deploy_type: string; // 'dotnet' | 'dotnet-fdd' | 'nestjs'
+  status: string;      // 'running' | 'success' | 'failed' | 'rolled_back'
+  commit_hash: string; // Local git commit (dotnet) or deployed commit (nestjs)
+  backup_path: string; // Backup tar.gz path (dotnet) or previous commit hash (nestjs)
+  triggered_by: string; // 'deploy' | 'rollback'
+  rollback_of: string;  // ID of deployment this rollback targets
+  started_at: string;
+  finished_at: string | null;
+  duration_ms: number;
+  logs: string; // JSON array of log entries
+}
+
+export function createDeploymentHistory(
+  entry: Pick<DeploymentHistory, "id" | "project_key" | "deploy_type" | "triggered_by" | "rollback_of">
+): DeploymentHistory {
+  const db = getDb();
+  db.prepare(
+    "INSERT INTO deployment_history (id, project_key, deploy_type, triggered_by, rollback_of) VALUES (?, ?, ?, ?, ?)"
+  ).run(entry.id, entry.project_key, entry.deploy_type, entry.triggered_by, entry.rollback_of ?? "");
+  return db.prepare("SELECT * FROM deployment_history WHERE id = ?").get(entry.id) as DeploymentHistory;
+}
+
+export function updateDeploymentHistory(
+  id: string,
+  fields: Partial<Pick<DeploymentHistory, "status" | "commit_hash" | "backup_path" | "finished_at" | "duration_ms" | "logs">>
+): void {
+  const db = getDb();
+  const sets: string[] = [];
+  const values: unknown[] = [];
+  for (const [key, value] of Object.entries(fields)) {
+    if (value !== undefined) {
+      sets.push(`${key} = ?`);
+      values.push(value);
+    }
+  }
+  if (sets.length === 0) return;
+  values.push(id);
+  db.prepare(`UPDATE deployment_history SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+}
+
+export function getDeploymentHistory(projectKey: string, limit = 20): DeploymentHistory[] {
+  return getDb()
+    .prepare(
+      "SELECT * FROM deployment_history WHERE project_key = ? ORDER BY started_at DESC LIMIT ?"
+    )
+    .all(projectKey, limit) as DeploymentHistory[];
+}
+
+export function getDeploymentById(id: string): DeploymentHistory | undefined {
+  return getDb()
+    .prepare("SELECT * FROM deployment_history WHERE id = ?")
+    .get(id) as DeploymentHistory | undefined;
+}
+
+/**
+ * Son başarılı deploy kaydını döner.
+ * excludeId verilirse o kaydı atlar (rollback sırasında aktif kaydı atlamak için).
+ */
+export function getLastSuccessfulDeployment(
+  projectKey: string,
+  excludeId?: string
+): DeploymentHistory | undefined {
+  const db = getDb();
+  if (excludeId) {
+    return db
+      .prepare(
+        "SELECT * FROM deployment_history WHERE project_key = ? AND status = 'success' AND id != ? ORDER BY started_at DESC LIMIT 1"
+      )
+      .get(projectKey, excludeId) as DeploymentHistory | undefined;
+  }
+  return db
+    .prepare(
+      "SELECT * FROM deployment_history WHERE project_key = ? AND status = 'success' ORDER BY started_at DESC LIMIT 1"
+    )
+    .get(projectKey) as DeploymentHistory | undefined;
 }
 
 export function updateTask(id: string, fields: Partial<Pick<Task, "status" | "progress" | "title" | "description" | "priority" | "next_task_id" | "max_retries" | "retry_count" | "doc_path" | "check_url" | "generate_doc">>): Task | null {

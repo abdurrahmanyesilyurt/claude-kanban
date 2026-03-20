@@ -102,6 +102,8 @@ export interface Workflow {
   status: WorkflowStatus;
   shared_memory: string;
   plan: string;
+  started_at: string | null;
+  completed_at: string | null;
   created_at: string;
 }
 
@@ -115,6 +117,9 @@ export interface WorkflowStep {
   depends_on: string;
   agent_summary: string;
   order_index: number;
+  started_at: string | null;
+  finished_at: string | null;
+  completed_at: string | null;
   created_at: string;
 }
 

@@ -1,5 +1,6 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { v4 as uuidv4 } from "uuid";
+import { spawn } from "child_process";
 import {
   getWorkflow,
   getWorkflowSteps,
@@ -22,6 +23,45 @@ Web sayfalarını kontrol etmek için Bash ile browser-cli kullanabilirsin:
   node scripts/browser-cli.mjs navigate <url>      — Başka sayfaya git
   node scripts/browser-cli.mjs screenshot          — Screenshot al
   node scripts/browser-cli.mjs close               — Tarayıcıyı kapat
+`;
+
+const MOBILE_TEST_INSTRUCTIONS = `
+
+--- Mobil Test Aracı (Android Emülatör) ---
+Mobil uygulama testleri için node scripts/mobile-test.mjs kullan.
+ÖNEMLİ: Screenshot ALMA! Hafızayı tüketir ve hata verir.
+Bunun yerine inspect (XML-based, ~50KB) kullan — tüm ekran elementlerini text olarak görürsün.
+
+TEMEL KOMUTLAR:
+  node scripts/mobile-test.mjs inspect              — Ekrandaki tüm elementleri listele (HAFİF!)
+  node scripts/mobile-test.mjs screen-text           — Ekrandaki tüm yazıları al
+  node scripts/mobile-test.mjs tap-text "Giriş Yap"  — Yazıya göre tıkla
+  node scripts/mobile-test.mjs tap-id "btn_login"     — ID'ye göre tıkla
+  node scripts/mobile-test.mjs tap 540 800            — Koordinata tıkla
+  node scripts/mobile-test.mjs type "admin"           — Yazı yaz
+  node scripts/mobile-test.mjs clear-and-type "yeni"  — Alanı temizle + yaz
+  node scripts/mobile-test.mjs check-text "Dashboard" — Yazı var mı kontrol et
+  node scripts/mobile-test.mjs wait-for "Hoşgeldin" 20 — Yazı görünene kadar bekle
+  node scripts/mobile-test.mjs scroll-down            — Aşağı kaydır
+  node scripts/mobile-test.mjs scroll-up              — Yukarı kaydır
+  node scripts/mobile-test.mjs back                   — Geri tuşu
+  node scripts/mobile-test.mjs logcat-errors 30       — Son hata logları
+  node scripts/mobile-test.mjs app-start <package>    — Uygulama başlat
+  node scripts/mobile-test.mjs app-stop <package>     — Uygulama durdur
+
+TEST YAKLAŞIMI:
+1. Her ekranda önce "inspect" çalıştır — elementleri gör
+2. check-text ile beklenen elementlerin varlığını doğrula
+3. tap-text veya tap-id ile etkileşim kur
+4. Tekrar inspect ile sonucu doğrula
+5. Screenshot SADECE görsel bir bug kanıtlamak gerektiğinde al:
+   node scripts/mobile-test.mjs screenshot "bug-kanit"
+6. Hata bulunca logcat-errors ile log kontrol et
+
+ASLA şunları yapma:
+- Her adımda screenshot alma
+- adb exec-out screencap kullanma
+- Büyük PNG dosyaları oluşturma
 `;
 
 // --- In-memory log pub/sub (same pattern as claude-agent.ts) ---
@@ -79,6 +119,16 @@ export function isWorkflowRunning(workflowId: string): boolean {
   return runningWorkflows.has(workflowId);
 }
 
+/** Parse depends_on field — handles JSON array, comma-separated, or single ID */
+function parseDependsOn(raw: string | undefined | null): string[] {
+  const trimmed = (raw || "").trim();
+  if (!trimmed) return [];
+  if (trimmed.startsWith("[")) {
+    try { return JSON.parse(trimmed); } catch { return []; }
+  }
+  return trimmed.split(",").map(s => s.trim()).filter(Boolean);
+}
+
 // --- Agent query helper (reusable for coordinator and steps) ---
 interface QueryResult {
   text: string;
@@ -107,7 +157,37 @@ async function runQueryAgent(
       allowedTools,
       maxTurns,
       abortController,
-      permissionMode: "bypassPermissions",
+      pathToClaudeCodeExecutable: "C:\\Users\\HP\\AppData\\Roaming\\npm\\claude.cmd",
+      spawnClaudeCodeProcess: ({ command, args, cwd, env, signal }) => {
+        // Filter out empty --setting-sources arg (SDK bug: sends "" which breaks CLI parsing)
+        const filteredArgs = [];
+        for (let i = 0; i < args.length; i++) {
+          if (args[i] === "--setting-sources" && (i + 1 >= args.length || args[i + 1] === "")) {
+            i++;
+            continue;
+          }
+          filteredArgs.push(args[i]);
+        }
+        const proc = spawn(command, filteredArgs, {
+          cwd,
+          stdio: ["pipe", "pipe", "pipe"] as ["pipe", "pipe", "pipe"],
+          signal,
+          env: env as NodeJS.ProcessEnv,
+          windowsHide: true,
+          shell: true,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        }) as any;
+        return {
+          stdin: proc.stdin,
+          stdout: proc.stdout,
+          get killed() { return proc.killed; },
+          get exitCode() { return proc.exitCode; },
+          kill: proc.kill.bind(proc),
+          on: proc.on.bind(proc),
+          once: proc.once.bind(proc),
+          off: proc.off.bind(proc),
+        };
+      },
     },
   });
 
@@ -169,7 +249,7 @@ async function runCoordinatorPlan(
   maxTurns: number,
   abortController: AbortController
 ): Promise<boolean> {
-  updateWorkflow(workflowId, { status: "planning" });
+  updateWorkflow(workflowId, { status: "planning", started_at: new Date().toISOString() });
   pushLog(workflowId, `[koordinatör] Görev analiz ediliyor ve plan oluşturuluyor...`);
 
   const prompt = `Sen bir Koordinatör Agent'sın. Aşağıdaki hedefi analiz et ve bağımsız alt adımlara böl.
@@ -260,7 +340,7 @@ async function executeWorkflowSteps(
   const runStep = async (step: WorkflowStepRow) => {
     if (abortController.signal.aborted) return;
 
-    updateWorkflowStep(step.id, { status: "running" });
+    updateWorkflowStep(step.id, { status: "running", started_at: new Date().toISOString() });
     pushLog(workflowId, `[${step.role}] Adım başlatılıyor: ${step.title}`);
 
     // Build prompt with shared memory context
@@ -303,6 +383,17 @@ TÜM komutlar başarılı olana kadar görevi TAMAMLANMIŞ sayma.`;
 
     fullPrompt += BROWSER_INSTRUCTIONS_WORKFLOW;
 
+    // Auto-inject mobile test instructions for test/mobile roles
+    const mobileRoles = ["test", "mobile", "frontend", "mobile-test"];
+    const isMobileStep = mobileRoles.some(r => step.role.toLowerCase().includes(r))
+      || step.title.toLowerCase().includes("mobil")
+      || step.title.toLowerCase().includes("test")
+      || step.prompt.toLowerCase().includes("emulator")
+      || step.prompt.toLowerCase().includes("adb ");
+    if (isMobileStep) {
+      fullPrompt += MOBILE_TEST_INSTRUCTIONS;
+    }
+
     try {
       const result = await runQueryAgent(
         workflowId, `[${step.role}]`, fullPrompt, projectPath, allowedTools, maxTurns, abortController
@@ -310,7 +401,7 @@ TÜM komutlar başarılı olana kadar görevi TAMAMLANMIŞ sayma.`;
 
       // Save summary to step and shared memory
       const summary = result.text.slice(0, 1000);
-      updateWorkflowStep(step.id, { status: "done", agent_summary: summary });
+      updateWorkflowStep(step.id, { status: "done", agent_summary: summary, finished_at: new Date().toISOString(), completed_at: new Date().toISOString() });
 
       // Update shared memory
       const currentWf = getWorkflow(workflowId);
@@ -323,7 +414,7 @@ TÜM komutlar başarılı olana kadar görevi TAMAMLANMIŞ sayma.`;
       if (abortController.signal.aborted) return;
       const msg = err instanceof Error ? err.message : String(err);
       pushLog(workflowId, `[${step.role}] [error] ${msg}`);
-      updateWorkflowStep(step.id, { status: "error", agent_summary: `Hata: ${msg}` });
+      updateWorkflowStep(step.id, { status: "error", agent_summary: `Hata: ${msg}`, finished_at: new Date().toISOString(), completed_at: new Date().toISOString() });
     }
   };
 
@@ -345,7 +436,7 @@ TÜM komutlar başarılı olana kadar görevi TAMAMLANMIŞ sayma.`;
 
     // Find steps ready to run (all deps satisfied)
     const ready = pending.filter((s) => {
-      const deps: string[] = JSON.parse(s.depends_on || "[]");
+      const deps: string[] = parseDependsOn(s.depends_on);
       return deps.every((depId) => {
         const depStep = steps.find((x) => x.id === depId);
         return depStep?.status === "done";
@@ -354,13 +445,13 @@ TÜM komutlar başarılı olana kadar görevi TAMAMLANMIŞ sayma.`;
 
     // Also skip steps whose dependencies have errors
     for (const s of pending) {
-      const deps: string[] = JSON.parse(s.depends_on || "[]");
+      const deps: string[] = parseDependsOn(s.depends_on);
       const hasErrorDep = deps.some((depId) => {
         const depStep = steps.find((x) => x.id === depId);
         return depStep?.status === "error";
       });
       if (hasErrorDep && !executed.has(s.id)) {
-        updateWorkflowStep(s.id, { status: "skipped", agent_summary: "Bağımlılık hatası nedeniyle atlandı" });
+        updateWorkflowStep(s.id, { status: "skipped", agent_summary: "Bağımlılık hatası nedeniyle atlandı", completed_at: new Date().toISOString() });
         executed.add(s.id);
         pushLog(workflowId, `[${s.role}] ⊘ Atlandı (bağımlılık hatası)`);
       }
@@ -480,7 +571,7 @@ export async function startWorkflow(workflowId: string) {
 
     if (!stepsOk) {
       pushLog(workflowId, `[sistem] Bazı adımlarda hata oluştu`);
-      updateWorkflow(workflowId, { status: "error" });
+      updateWorkflow(workflowId, { status: "error", completed_at: new Date().toISOString() });
       runningWorkflows.delete(workflowId);
       return;
     }
@@ -493,16 +584,90 @@ export async function startWorkflow(workflowId: string) {
     }
 
     if (reviewOk) {
-      updateWorkflow(workflowId, { status: "done" });
+      updateWorkflow(workflowId, { status: "done", completed_at: new Date().toISOString() });
       pushLog(workflowId, `[sistem] ✓ İş akışı başarıyla tamamlandı!`);
     } else {
-      updateWorkflow(workflowId, { status: "done" });
+      updateWorkflow(workflowId, { status: "done", completed_at: new Date().toISOString() });
       pushLog(workflowId, `[sistem] İş akışı tamamlandı (uyarılarla)`);
     }
   } catch (err) {
     if (!abortController.signal.aborted) {
       pushLog(workflowId, `[sistem] [error] ${err instanceof Error ? err.message : String(err)}`);
-      updateWorkflow(workflowId, { status: "error" });
+      updateWorkflow(workflowId, { status: "error", completed_at: new Date().toISOString() });
+    }
+  } finally {
+    runningWorkflows.delete(workflowId);
+    pruneOldWorkflowLogs();
+  }
+}
+
+/**
+ * Resume a workflow that was interrupted (e.g., server restart).
+ * Skips the planning phase and directly executes remaining pending steps.
+ */
+export async function resumeWorkflow(workflowId: string) {
+  const wf = getWorkflow(workflowId);
+  if (!wf) return;
+
+  const db = getDb();
+  const project = db.prepare("SELECT * FROM projects WHERE id = ?").get(wf.project_id) as Project | undefined;
+  if (!project) {
+    updateWorkflow(workflowId, { status: "error" });
+    return;
+  }
+
+  const abortController = new AbortController();
+  runningWorkflows.set(workflowId, abortController);
+  workflowLogs.set(workflowId, []);
+
+  const allowedTools = project.allowed_tools?.split(",").filter(Boolean) ?? [];
+  const maxTurns = project.max_turns ?? 30;
+
+  // Reset any stuck "running" steps to "pending"
+  const steps = getWorkflowSteps(workflowId);
+  for (const s of steps) {
+    if (s.status === "running") {
+      updateWorkflowStep(s.id, { status: "pending" });
+    }
+  }
+
+  updateWorkflow(workflowId, { status: "running" });
+  pushLog(workflowId, `[sistem] İş akışı devam ettiriliyor (resume): ${wf.title}`);
+
+  try {
+    // Skip planning — go directly to step execution
+    pushLog(workflowId, `[sistem] Kalan adımlar yürütülüyor...`);
+    const stepsOk = await executeWorkflowSteps(workflowId, project.path, allowedTools, maxTurns, abortController, project.build_command, project.test_command, project.custom_instructions, project.pre_task_command);
+    if (abortController.signal.aborted) {
+      runningWorkflows.delete(workflowId);
+      return;
+    }
+
+    if (!stepsOk) {
+      pushLog(workflowId, `[sistem] Bazı adımlarda hata oluştu`);
+      updateWorkflow(workflowId, { status: "error", completed_at: new Date().toISOString() });
+      runningWorkflows.delete(workflowId);
+      return;
+    }
+
+    // Phase 3: Coordinator reviews
+    const reviewOk = await runCoordinatorReview(workflowId, project.path, allowedTools, maxTurns, abortController);
+    if (abortController.signal.aborted) {
+      runningWorkflows.delete(workflowId);
+      return;
+    }
+
+    if (reviewOk) {
+      updateWorkflow(workflowId, { status: "done", completed_at: new Date().toISOString() });
+      pushLog(workflowId, `[sistem] ✓ İş akışı başarıyla tamamlandı!`);
+    } else {
+      updateWorkflow(workflowId, { status: "done", completed_at: new Date().toISOString() });
+      pushLog(workflowId, `[sistem] İş akışı tamamlandı (uyarılarla)`);
+    }
+  } catch (err) {
+    if (!abortController.signal.aborted) {
+      pushLog(workflowId, `[sistem] [error] ${err instanceof Error ? err.message : String(err)}`);
+      updateWorkflow(workflowId, { status: "error", completed_at: new Date().toISOString() });
     }
   } finally {
     runningWorkflows.delete(workflowId);

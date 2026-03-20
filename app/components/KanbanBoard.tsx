@@ -1,10 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import type { Project, Task } from "@/lib/types";
 import { STATUS_LABELS, STATUS_COLORS } from "@/lib/types";
 import { ToastProvider, useToast } from "./Toast";
 import { useTheme } from "../hooks/useTheme";
+import { useNotifications } from "../hooks/useNotifications";
+import { useSound } from "../hooks/useSound";
 import Sidebar from "./Sidebar";
 import TaskCard from "./TaskCard";
 import NewTaskModal from "./NewTaskModal";
@@ -16,6 +18,7 @@ import WorkflowBoard from "./WorkflowBoard";
 import BrowserPanel from "./BrowserPanel";
 import WhatsAppStatus from "./WhatsAppStatus";
 import DeployPanel from "./DeployPanel";
+import NotificationSettings from "./NotificationSettings";
 
 const COLUMNS: Task["status"][] = ["todo", "in_progress", "done", "error"];
 
@@ -30,6 +33,9 @@ export default function KanbanBoard() {
 function KanbanBoardInner() {
   const { toast } = useToast();
   const { theme, toggleTheme } = useTheme();
+  const { notify } = useNotifications();
+  const { playSuccess, playError } = useSound();
+  const prevStatusRef = useRef<Map<string, string>>(new Map());
   const [projects, setProjects] = useState<Project[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
@@ -45,6 +51,7 @@ function KanbanBoardInner() {
   const [showBrowser, setShowBrowser] = useState(false);
   const [showWhatsApp, setShowWhatsApp] = useState(false);
   const [showDeploy, setShowDeploy] = useState(false);
+  const [arşiviAcikKolonlar, setArşiviAcikKolonlar] = useState<Set<string>>(new Set());
 
   const fetchData = useCallback(async () => {
     const [projRes, taskRes] = await Promise.all([
@@ -60,6 +67,31 @@ function KanbanBoardInner() {
     const interval = setInterval(fetchData, 3000);
     return () => clearInterval(interval);
   }, [fetchData]);
+
+  // Track task status changes and fire browser notifications + sounds
+  useEffect(() => {
+    const prevMap = prevStatusRef.current;
+    // First load: map is empty — just populate it, no notifications
+    const isFirstLoad = prevMap.size === 0 && tasks.length > 0;
+
+    tasks.forEach((task) => {
+      const prevStatus = prevMap.get(task.id);
+      const currStatus = task.status;
+
+      // Fire notification only on actual transitions (not first load, not new tasks, not same status)
+      if (!isFirstLoad && prevStatus !== undefined && prevStatus !== currStatus) {
+        if (currStatus === "done") {
+          notify("✅ Task Tamamlandı", task.title, { tag: `task-done-${task.id}` });
+          playSuccess();
+        } else if (currStatus === "error") {
+          notify("❌ Task Başarısız", task.title, { tag: `task-error-${task.id}` });
+          playError();
+        }
+      }
+
+      prevMap.set(task.id, currStatus);
+    });
+  }, [tasks, notify, playSuccess, playError]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -357,6 +389,7 @@ function KanbanBoardInner() {
             >
               {theme === "dark" ? "\u2600\uFE0F" : "\uD83C\uDF19"}
             </button>
+            <NotificationSettings />
             <button
               onClick={() => setSortBy(sortBy === "date" ? "priority" : "date")}
               className="px-2.5 py-1.5 text-xs border border-border hover:border-border-hover rounded-md transition-colors text-muted hover:text-foreground"
@@ -449,6 +482,19 @@ function KanbanBoardInner() {
                 }
                 return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
               });
+
+            // Archive system: only for 'done' and 'error' columns
+            const hasArchive = status === "done" || status === "error";
+            const ARCHIVE_LIMIT = 5;
+            const isArchiveOpen = arşiviAcikKolonlar.has(status);
+            const hiddenCount = hasArchive ? Math.max(0, columnTasks.length - ARCHIVE_LIMIT) : 0;
+            const visibleTasks = hasArchive && !isArchiveOpen
+              ? columnTasks.slice(0, ARCHIVE_LIMIT)
+              : columnTasks;
+            const archivedTasks = hasArchive && isArchiveOpen
+              ? columnTasks.slice(ARCHIVE_LIMIT)
+              : [];
+
             return (
               <div
                 key={status}
@@ -476,7 +522,8 @@ function KanbanBoardInner() {
 
                 {/* Cards */}
                 <div className="flex-1 space-y-2 overflow-y-auto pr-1">
-                  {columnTasks.map((task) => (
+                  {/* Visible tasks (always shown) */}
+                  {visibleTasks.map((task) => (
                     <TaskCard
                       key={task.id}
                       task={task}
@@ -489,6 +536,48 @@ function KanbanBoardInner() {
                       onEdit={setEditingTask}
                     />
                   ))}
+
+                  {/* Archived tasks (shown when archive is open, with reduced opacity) */}
+                  {isArchiveOpen && archivedTasks.map((task) => (
+                    <div key={task.id} className="opacity-60">
+                      <TaskCard
+                        task={task}
+                        project={projectMap.get(task.project_id)}
+                        onStartAgent={handleStartAgent}
+                        onStopAgent={handleStopAgent}
+                        onOpenLog={setLogTaskId}
+                        onDelete={handleDeleteTask}
+                        onRestart={handleRestartTask}
+                        onEdit={setEditingTask}
+                      />
+                    </div>
+                  ))}
+
+                  {/* Archive toggle button */}
+                  {hasArchive && !isArchiveOpen && hiddenCount > 0 && (
+                    <button
+                      onClick={() => setArşiviAcikKolonlar((prev) => {
+                        const next = new Set(prev);
+                        next.add(status);
+                        return next;
+                      })}
+                      className="w-full text-left text-xs text-muted/60 hover:text-muted transition-colors py-1 px-1"
+                    >
+                      Arşivi Gör ({hiddenCount} daha...)
+                    </button>
+                  )}
+                  {hasArchive && isArchiveOpen && (
+                    <button
+                      onClick={() => setArşiviAcikKolonlar((prev) => {
+                        const next = new Set(prev);
+                        next.delete(status);
+                        return next;
+                      })}
+                      className="w-full text-left text-xs text-muted/60 hover:text-muted transition-colors py-1 px-1"
+                    >
+                      Arşivi Kapat
+                    </button>
+                  )}
 
                   {columnTasks.length === 0 && (
                     <div className="border border-dashed border-border rounded-lg p-4 text-center text-xs text-muted/40">

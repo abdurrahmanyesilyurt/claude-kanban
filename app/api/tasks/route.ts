@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
     title,
     description: description ?? "",
     priority: priority ?? "medium",
-    check_url: check_url ?? null,
+    check_url: check_url ?? "",
     generate_doc: generate_doc ?? 0,
   });
 

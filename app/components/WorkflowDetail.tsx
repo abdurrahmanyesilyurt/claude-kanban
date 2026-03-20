@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { Workflow, WorkflowStep } from "@/lib/types";
 import { WORKFLOW_STATUS_LABELS, WORKFLOW_STATUS_COLORS, STEP_STATUS_LABELS } from "@/lib/types";
 import WorkflowLogPanel from "./WorkflowLogPanel";
+import GanttChart from "./GanttChart";
 
 interface WorkflowDetailProps {
   workflow: Workflow;
@@ -15,6 +16,7 @@ export default function WorkflowDetail({ workflow, onClose, onRefresh }: Workflo
   const [steps, setSteps] = useState<WorkflowStep[]>([]);
   const [showLog, setShowLog] = useState(false);
   const [expandedStep, setExpandedStep] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<"waves" | "gantt">("waves");
 
   const fetchSteps = () => {
     fetch(`/api/workflows/steps?workflow_id=${workflow.id}`)
@@ -54,7 +56,13 @@ export default function WorkflowDetail({ workflow, onClose, onRefresh }: Workflo
   // Group steps into waves by dependency depth
   const getWave = (step: WorkflowStep, allSteps: WorkflowStep[], cache: Map<string, number> = new Map()): number => {
     if (cache.has(step.id)) return cache.get(step.id)!;
-    const deps: string[] = JSON.parse(step.depends_on || "[]");
+    let deps: string[] = [];
+    const raw = (step.depends_on || "").trim();
+    if (raw.startsWith("[")) {
+      try { deps = JSON.parse(raw); } catch { deps = []; }
+    } else if (raw.length > 0) {
+      deps = raw.split(",").map(s => s.trim()).filter(Boolean);
+    }
     if (deps.length === 0) { cache.set(step.id, 0); return 0; }
     const maxDep = Math.max(...deps.map((dId) => {
       const depStep = allSteps.find((s) => s.id === dId);
@@ -148,7 +156,23 @@ export default function WorkflowDetail({ workflow, onClose, onRefresh }: Workflo
                 Log
               </button>
               {steps.length > 0 && (
-                <span className="text-xs text-muted ml-auto">{doneCount}/{steps.length} adım tamamlandı</span>
+                <>
+                  <div className="flex items-center border border-border rounded-md overflow-hidden ml-auto">
+                    <button
+                      onClick={() => setViewMode("waves")}
+                      className={`px-2.5 py-1 text-xs transition-colors ${viewMode === "waves" ? "bg-indigo-600 text-white" : "text-muted hover:text-foreground"}`}
+                    >
+                      Dalgalar
+                    </button>
+                    <button
+                      onClick={() => setViewMode("gantt")}
+                      className={`px-2.5 py-1 text-xs transition-colors ${viewMode === "gantt" ? "bg-indigo-600 text-white" : "text-muted hover:text-foreground"}`}
+                    >
+                      Gantt
+                    </button>
+                  </div>
+                  <span className="text-xs text-muted">{doneCount}/{steps.length} adım</span>
+                </>
               )}
             </div>
           </div>
@@ -161,6 +185,8 @@ export default function WorkflowDetail({ workflow, onClose, onRefresh }: Workflo
                   {workflow.status === "draft" ? "İş akışını başlattığınızda koordinatör planı oluşturacak" : "Plan oluşturuluyor..."}
                 </p>
               </div>
+            ) : viewMode === "gantt" ? (
+              <GanttChart steps={steps} workflowStartedAt={workflow.started_at} />
             ) : (
               <div className="flex gap-6 overflow-x-auto pb-4">
                 {sortedWaves.map(([wave, waveSteps], wi) => (

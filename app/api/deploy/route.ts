@@ -6,6 +6,7 @@ import {
   checkServer,
   getServerLogs,
   DEPLOY_CONFIGS,
+  type HealthCheckConfig,
 } from "@/lib/deploy-service";
 
 // GET: Get deploy status for a project or all projects
@@ -46,10 +47,14 @@ export async function GET(req: NextRequest) {
 }
 
 // POST: Trigger deploy
+// Body: { project: string, healthCheck?: { url: string, retries?: number, intervalMs?: number } }
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { project } = body;
+    const { project, healthCheck } = body as {
+      project: string;
+      healthCheck?: HealthCheckConfig;
+    };
 
     if (!project || !DEPLOY_CONFIGS[project]) {
       return NextResponse.json(
@@ -66,13 +71,15 @@ export async function POST(req: NextRequest) {
     }
 
     // Run deploy in background (don't await)
-    deploy(project).catch((e) =>
+    // healthCheck: body'den gelirse override olarak kullanılır, yoksa DeployConfig.healthCheck'e bakılır
+    deploy(project, healthCheck).catch((e) =>
       console.error(`[Deploy:${project}] Error:`, e)
     );
 
     return NextResponse.json({
       ok: true,
       message: `${DEPLOY_CONFIGS[project].name} deploy baslatildi`,
+      healthCheckConfigured: !!(healthCheck ?? DEPLOY_CONFIGS[project].healthCheck),
     });
   } catch (e) {
     return NextResponse.json({ error: String(e) }, { status: 500 });

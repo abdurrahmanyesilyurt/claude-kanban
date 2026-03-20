@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /c/Users/HP/source/repos/claude-kanban -maxdepth 2 -type f \\\\\\(-name .env* -o -name kanban.db* -o -name *.db \\\\\\))",
+      "Bash(git -C /c/Users/HP/source/repos/claude-kanban ls-files)",
+      "Bash(find /c/Users/HP/source/repos/claude-kanban -name middleware* -o -name .env*)",
+      "Bash(npm run:*)",
+      "Bash(python -m json.tool)",
+      "Bash(curl -s -X POST http://localhost:3000/api/tasks -H \"Content-Type: application/json\" -d '{:*)",
+      "Bash(curl -s -X POST http://localhost:3000/api/agent/start -H \"Content-Type: application/json\" -d '{:*)"
+    ]
+  }
+}

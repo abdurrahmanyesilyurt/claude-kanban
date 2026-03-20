@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import { updateTask, createAgentRun, finishAgentRun, getDb } from "./db";
 import type { Task as DbTask } from "./db";
 import fs from "fs";
+import { spawn } from "child_process";
 import path from "path";
 
 // In-memory log store per task (for SSE streaming)
@@ -246,7 +247,37 @@ export async function runAgent(
         allowedTools,
         maxTurns,
         abortController,
-        permissionMode: "bypassPermissions",
+        pathToClaudeCodeExecutable: "C:\\Users\\HP\\AppData\\Roaming\\npm\\claude.cmd",
+        spawnClaudeCodeProcess: ({ command, args, cwd, env, signal }) => {
+          // Filter out empty --setting-sources arg (SDK bug: sends "" which breaks CLI parsing)
+          const filteredArgs = [];
+          for (let i = 0; i < args.length; i++) {
+            if (args[i] === "--setting-sources" && (i + 1 >= args.length || args[i + 1] === "")) {
+              i++;
+              continue;
+            }
+            filteredArgs.push(args[i]);
+          }
+          const proc = spawn(command, filteredArgs, {
+            cwd,
+            stdio: ["pipe", "pipe", "pipe"] as ["pipe", "pipe", "pipe"],
+            signal,
+            env: env as NodeJS.ProcessEnv,
+            windowsHide: true,
+            shell: true,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          }) as any;
+          return {
+            stdin: proc.stdin,
+            stdout: proc.stdout,
+            get killed() { return proc.killed; },
+            get exitCode() { return proc.exitCode; },
+            kill: proc.kill.bind(proc),
+            on: proc.on.bind(proc),
+            once: proc.once.bind(proc),
+            off: proc.off.bind(proc),
+          };
+        },
       },
     });
 
